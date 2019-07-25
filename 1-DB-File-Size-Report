@@ -1,0 +1,14 @@
+SELECT 
+    [file_id] AS [File ID],
+    [type] AS [File Type],
+    substring([physical_name],1,1) AS [Drive],
+    [name] AS [Logical Name],
+    [physical_name] AS [Physical Name],
+    CAST([size] as DECIMAL(38,0))/128. AS [File Size MB], 
+    CAST(FILEPROPERTY([name],'SpaceUsed') AS DECIMAL(38,0))/128. AS [Space Used MB], 
+    (CAST([size] AS DECIMAL(38,0))/128) - (CAST(FILEPROPERTY([name],'SpaceUsed') AS DECIMAL(38,0))/128.) AS [Free Space],
+    [max_size] AS [Max Size],
+    [is_percent_growth] AS [Percent Growth Enabled],
+    [growth] AS [Growth Rate],
+    SYSDATETIME() AS [Current Date]
+FROM sys.database_files;
