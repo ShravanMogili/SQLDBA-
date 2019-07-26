@@ -1,0 +1,105 @@
+Run SQL on All servers in your inventory
+
+http://www.sqlservercentral.com/scripts/Maintenance+and+Management/31509/
+
+There are many times you have to deploy a common code in all of your SQL Servers. I am sure there might be thousands of way to do this, but here is how I do it and it works great. 
+
+Good thing is - you can either pass SQL Statement or a SQL script (in a file), comma separated server list or use the servers from your inventory database. 
+
+
+
+
+----FUNCTION Script:
+--this function generates one column table with 
+-- all the values from passed commaseparated list
+
+create function udf_generate_inlist_to_table (@list varchar(500))
+returns @tbl TABLE (listitem varchar (100) not null) as
+begin
+	declare @pos		int,
+		@textpos	int,
+		@chunklen	smallint,
+		@str		nvarchar(4000),
+		@tmpstr		nvarchar(4000),
+		@leftover	nvarchar(4000)
+
+	set @textpos = 1
+	set @leftover = ''
+	While @textpos <= datalength(@list)/2
+	BEGIN
+		set @chunklen = 4000 - datalength(@leftover) / 2
+		set @tmpstr = ltrim(@leftover + substring(@list, @textpos, @chunklen))
+		set @textpos = @textpos + @chunklen
+
+		set @pos = charindex(',',@tmpstr)
+		while @pos > 0
+		begin
+			set @str = substring(@tmpstr,1,@pos-1)
+			insert @tbl (listitem) values(@str)
+			set @tmpstr = ltrim(substring(@tmpstr,@pos+1,len(@tmpstr)))
+			set @pos = charindex(',',@tmpstr)
+		end
+		
+		set @leftover = @tmpstr
+	end
+	
+	if ltrim(rtrim(@leftover)) <> ''
+		insert @tbl (listitem) values (@leftover)
+
+	return
+end
+
+
+----STORED PROCEDURE SCRIPT:
+
+CREATE PROCEDURE [dbo].[usp_RunSQLonAllServers] --'SQLdbadev01,sqldbadev02,sqldbadev03','dba_stat',@SQLStatement = 'select name from sysobjects where type = ''u'''
+	@ServerList varchar(8000) = NULL,
+	@DbName varchar(50),
+	@SQLFile varchar(200) = NULL,
+	@SQLStatement varchar(8000) = NULL,
+	@OutPutFile varchar(200) = 'e:\batch_admin\usp_RunSQLonALLServers.log'
+AS
+
+set nocount on
+declare @machine 	varchar(50),
+	@cmd		varchar(8000),
+	@rc		int,
+	@errornum	int,
+	@errormsg	varchar(500),
+	@RowCount 	int
+
+set @cmd = 'echo > ' + @outputfile
+exec master..xp_cmdshell @cmd
+
+if @ServerList is NULL
+	declare machine_name cursor for 
+	select Server from <YOUR SERVER INVENTORY TABLE>
+else 
+	declare machine_name cursor for 
+	select listitem from dbo.udf_generate_inlist_to_table(@ServerList)  -- this function generates one column table with 
+				-- all the values from passed commaseparated list
+
+open machine_name
+
+FETCH NEXT FROM machine_name 
+INTO @machine
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+	if @SQLFile is not NULL
+		set @cmd = 'osql -S' + @machine + ' -d' + @dbname + ' -w8000 -E -h-1 -s"|" -n -b -i' + @SQLFile + ' >>' + @OutPutFile
+	else if @SQLStatement is not null
+		set @cmd = 'osql -S' + @machine + ' -d' + @dbname + ' -w8000 -E -h-1 -s"|" -n -b -Q"set nocount on '+ @SQLStatement + '" >>' + @OutPutFile		
+	print @cmd	
+	exec @rc = master..xp_cmdshell @cmd---, no_output
+	if @rc <> 0
+		print 'Unable to connect to ' + @machine + '.' + @dbname + '. Check the Output for detail'
+	
+	FETCH NEXT FROM machine_name 
+   	INTO @machine
+END
+
+CLOSE machine_name
+DEALLOCATE machine_name
+GO
+

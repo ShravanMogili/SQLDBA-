@@ -1,0 +1,111 @@
+Linked SQL Servers,  databases, and users Report
+
+
+Fixed user protion of the script. Sorry had the test script mixed with prod. I was asked to create a report listing all of our SQL Servers, and the databases on them. I was also asked to list everyone that has access to each database and whether it was a standard, windows or windows group login.
+I run this against a server that has all the servers linked. The script uses embeded cursors. This is my first script that I am sharing. I did not see any scripts out that provide the same information. I am sure that there can be improvements and I would like to see any.
+
+-- Created by Stacey Gregerson
+-- 10/15/2002
+-- Report that list SQL Server information, what databases are on it, 
+-- and what the logon's and logon types are for the database.
+
+
+DECLARE 
+	@server		VARCHAR(50),
+	@dbname		VARCHAR(50),
+	@db_sql		VARCHAR(50),
+	@message1 	VARCHAR(80), 
+	@message2 	VARCHAR(80),
+	@SQL		VARCHAR(200),
+	@Ver_SQL	VARCHAR(50)
+PRINT '----------------------SQL SERVER, DATABASE, AND LOGONS REPORT--------------'
+DECLARE SER_CUR CURSOR FOR
+SELECT srvname FROM sysservers
+		
+OPEN SER_CUR
+
+FETCH NEXT FROM SER_CUR 
+INTO @server
+WHILE @@FETCH_STATUS = 0
+BEGIN
+	PRINT ' '
+	SELECT @message1 = '***************** SERVER: ' + @server + ' ***********************************'
+	PRINT @message1
+	PRINT ''
+	SET @Ver_SQL = @server + '.master.dbo.xp_msver'
+	EXEC (@Ver_SQL)
+	
+			SET @sql = 'DECLARE DB_CUR CURSOR FOR SELECT NAME FROM ' + @server + '.master.dbo.sysdatabases where name not in (''master'', ''tempdb'', ''model'', ''msdb'', ''pubs'', ''northwinds'')'
+			
+				EXEC (@SQL)
+				OPEN DB_CUR
+				FETCH NEXT FROM  DB_CUR INTO @dbname
+				WHILE @@FETCH_STATUS = 0
+				BEGIN
+PRINT ' '						
+PRINT 'DATABASE: ' + @dbname
+				
+					
+
+							declare @type		CHAR(20),
+									@name		CHAR(15),
+									@islogon 	INT,
+									@isntname 	INT,
+									@isntuser 	INT,
+									@userMsg	VARCHAR(50),
+									@usr_sql	VARCHAR(200)
+
+								SET @usr_sql = 	 'DECLARE sysusers_CUR CURSOR FOR  select name, islogin, isntname, isntuser from ' + @server + '.[' + @dbname + '].dbo.sysusers where altuid != 1'
+								EXEC(@usr_sql)
+							
+									OPEN sysusers_CUR
+							
+								FETCH NEXT FROM sysusers_CUR
+								INTO @name, @islogon, @isntname, @isntuser
+								WHILE @@FETCH_STATUS = 0
+								Begin
+									if @isntname = 1 and @isntuser = 1
+									begin
+										set @type = 'NTlogin'
+									end
+									
+								else
+							
+									if @isntname = 1 and @isntuser = 0
+									begin
+										set @type = 'NTgroup'
+									end
+							
+								else
+									if @isntname = 0 and @isntuser = 0
+									begin
+										set @type = 'SQL Login only'
+									end
+							
+							set @userMsg = '		Database User: ' + @name + '  ' + @type
+							
+							Print @userMsg
+													
+								FETCH NEXT FROM sysusers_CUR
+									INTO @name, @islogon, @isntname, @isntuser
+							End
+							CLOSE sysusers_CUR
+							DEALLOCATE sysusers_CUR
+
+				
+				FETCH NEXT FROM  DB_CUR INTO @dbname
+			END
+			CLOSE DB_CUR
+			DEALLOCATE DB_CUR
+	
+	
+	FETCH NEXT FROM SER_CUR into @server
+END
+
+CLOSE SER_CUR
+DEALLOCATE SER_CUR
+
+
+
+
+

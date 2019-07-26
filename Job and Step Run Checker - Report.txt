@@ -1,0 +1,65 @@
+Job and Step Run Checker
+
+ I tend to run this script every morning on my 6 servers, just to get an overview of how the scheduled jobs and steps are doing.
+
+You can run this script inside a "Registered Server Group" query window to check all your environment's jobs at the same time.
+
+Very helpful if you have servers without Database Mail Alerts set up on job failures...
+
+To use, either run as is, or change the "SET @..." values to what you need. The search word string can help if you're looking for particular tables/columns that get touched by a T-SQL step.
+
+
+DECLARE
+ @lastXdays  int,
+ @searchWord varchar(50),
+ @badRunsOnly    bit,
+ @latestRunsOnly bit,
+ @activeJobsOnly bit
+
+SET @lastXdays  = 8
+SET @searchWord = '' --searches Job Names, Step Names and Step Commands
+SET @badRunsOnly    = 1
+SET @latestRunsOnly = 1
+SET @activeJobsOnly = 1
+
+SELECT
+ j.name,
+ h.step_id, h.step_name, s.subsystem,
+ LEFT(h.run_date,4)+'-'+SUBSTRING(CAST(h.run_date as varchar(8)),5,2)+'-'+RIGHT(h.run_date,2)+' '+
+ LEFT(RIGHT('00'+CAST(h.run_time as varchar(6)),6),2)+':'+SUBSTRING(RIGHT('000000'+CAST(h.run_time as varchar(6)),6),3,2)+':'+RIGHT('00'+CAST(h.run_time as varchar(6)),2)as 'StartTime',
+ CAST(
+  CAST(CAST(LEFT(RIGHT('00'+CAST(h.run_time as varchar(6)),6),2)+':'+SUBSTRING(RIGHT('000000'+CAST(h.run_time as varchar(6)),6),3,2)+':'+RIGHT('00'+CAST(h.run_time as varchar(6)),2)as time(0))as datetime)+
+  CAST(CAST(LEFT(RIGHT('00'+CAST(h.run_duration as varchar(6)),6),2)+':'+SUBSTRING(RIGHT('000000'+CAST(h.run_duration as varchar(6)),6),3,2)+':'+RIGHT('00'+CAST(h.run_duration as varchar(6)),2)as time(0))as datetime
+ )AS time(0))as 'EndTime',
+ LEFT(RIGHT('00'+CAST(h.run_duration as varchar(6)),6),2)+':'+SUBSTRING(RIGHT('000000'+CAST(h.run_duration as varchar(6)),6),3,2)+':'+RIGHT('00'+CAST(h.run_duration as varchar(6)),2)as 'Duration',
+ CASE run_status
+  WHEN 0 THEN'FAILED'
+  WHEN 1 THEN'Completed'
+  WHEN 2 THEN'RESET'
+  WHEN 3 THEN'CANCELLED'
+  WHEN 4 THEN'Executing'
+ END 'RunStatus',
+ s.command,
+ CASE
+  WHEN run_status<>1 OR h.message LIKE'%error%'
+  THEN SUBSTRING(h.message,CHARINDEX('Description:',message),LEN(message)-CHARINDEX('Description:',message))
+  ELSE ''
+ END 'Message'
+FROM msdb.dbo.sysjobhistory h
+LEFT JOIN(SELECT MAX(instance_id)id FROM msdb.dbo.sysjobhistory GROUP BY job_id,step_id) latest ON latest.id=h.instance_id
+LEFT JOIN msdb.dbo.sysjobs j ON j.job_id=h.job_id
+LEFT JOIN msdb.dbo.sysjobsteps s ON s.job_id=j.job_id AND s.step_id=h.step_id
+WHERE 1 = 1
+
+  AND NOT(h.run_status = 1 AND h.step_id = 0) -- ignore completed job outcomes
+  AND h.run_date >= 10000*YEAR(GETDATE()-@lastXdays)+100*MONTH(GETDATE()-@lastXdays)+DAY(GETDATE()-@lastXdays) -- jobs ran within last X days
+  AND(@searchWord IS NULL OR @searchWord = '' OR j.name LIKE'%'+@searchWord+'%' OR h.step_name LIKE'%'+@searchWord+'%') -- word search filter
+  AND(@latestRunsOnly = 0 OR latest.id IS NOT NULL) -- only the latest run per job and step
+  AND(@badRunsOnly = 0 OR h.run_status <> 1) -- only failed jobs/steps
+  AND(@activeJobsOnly = 0 OR j.enabled = 1) -- only active jobs
+
+ORDER BY 
+ --RunStatus DESC, --failed jobs first
+ StartTime DESC,-- timeline
+ --Duration DESC, --longest duration first
+ j.name,h.step_id DESC

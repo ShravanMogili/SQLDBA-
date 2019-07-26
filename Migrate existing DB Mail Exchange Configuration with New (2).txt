@@ -1,0 +1,132 @@
+--Migrate existing DB Mail Exchange Configuration with New
+--http://www.sqlservercentral.com/scripts/DBMAIL/120234/
+
+ If we have more then 100 servers to configure where we have more then 10 DB Mail profile so it become tedious task to complete.
+This script mitigated this risk where we just need to pass the new and existing exchange server details. and it will complete few hours task in minutes
+
+Sample :  EXECUTE TestDB..[UPDATESMTPSERVER] 'TK5ECITSMTP','NitinGupta@TestMail.com'
+
+
+Validate Configurations
+
+
+SELECT * FROM MSDB.DBO.SYSMAIL_ACCOUNT
+SELECT * FROM MSDB.DBO.SYSMAIL_PROFILE
+SELECT * FROM MSDB.DBO.SYSMAIL_SERVER 
+SELECT * FROM MSDB.DBO.SYSMAIL_PROFILEACCOUNT 
+SELECT * FROM SYSMAIL_ALLITEMS  
+
+
+Mitigation Step []:
+
+Use below SP to update existing SMTP Account details including SMTP servers:
+
+--USE TestDB
+
+-- LOG TABLE WILL CAPTURE ALL SMTP ACCOUNT CHANGES
+CREATE TABLE [DBO].[DBMAILSMTPCHANGELOG](
+                    [ACCOUNTNAME] [VARCHAR] (50) NULL,
+                    [DESCRIPTION] [VARCHAR] (50) NULL,
+                    [EMAIL_ADDRESS] [VARCHAR](100) NULL,
+                    [DISPLAY_NAME]  [VARCHAR](100) NULL,
+                    [REPLYTO_ADDRESS] [VARCHAR](255) NULL,
+                    [UPDATEDDATE] [DATETIME] DEFAULT GETDATE()
+) ON [PRIMARY]
+
+GO
+
+--SELECT * FROM [DBMAILSMTPCHANGELOG]
+
+--STORE PROCEDURE ACCEPTING NEW SMTP SERVER NAME & TEST EMAILID WHICH WILL GET NOTIFIED ON COMPLETION 
+CREATE PROCEDURE [DBO].[UPDATESMTPSERVER] 
+@NEWSMTPSERVERNAME VARCHAR(30),
+@SAMPLEMAILID VARCHAR(50)
+
+AS
+SET NOCOUNT ON
+
+DECLARE @SERVERNAME VARCHAR(50), @ACCOUNTNAME VARCHAR(20), @DESCRIPTION VARCHAR(200)
+DECLARE @EMAIL VARCHAR(100), @DISPLAYNAME VARCHAR(100), @REPLYADDRESS VARCHAR(100), @PROFILENAME VARCHAR(100)
+
+SELECT @SERVERNAME = SUBSTRING(SERVERNAME,0,CHARINDEX('.',SERVERNAME)) FROM MSDB.DBO.SYSMAIL_SERVER WHERE LAST_MOD_DATETIME = (SELECT MAX(LAST_MOD_DATETIME) 
+FROM MSDB.DBO.SYSMAIL_SERVER WHERE SERVERNAME LIKE '%SMTP%')
+
+IF LEN(@SERVERNAME)<=0
+BEGIN
+                    SELECT @SERVERNAME = SERVERNAME FROM MSDB.DBO.SYSMAIL_SERVER WHERE LAST_MOD_DATETIME = (SELECT MAX(LAST_MOD_DATETIME) 
+                    FROM MSDB.DBO.SYSMAIL_SERVER WHERE SERVERNAME LIKE '%SMTP%')
+END
+
+
+PRINT 'TAKING BACKUP ON TestDB..DBMAILSMTPCHANGELOG'
+INSERT INTO MASTER..DBMAILSMTPCHANGELOG SELECT NAME,DESCRIPTION, EMAIL_ADDRESS,DISPLAY_NAME, REPLYTO_ADDRESS,GETDATE()  FROM MSDB.DBO.SYSMAIL_ACCOUNT   
+
+
+DECLARE SMTPCHK CURSOR FOR SELECT NAME FROM MSDB..SYSMAIL_PROFILE
+
+OPEN SMTPCHK   
+FETCH NEXT FROM SMTPCHK INTO @PROFILENAME   
+
+WHILE @@FETCH_STATUS = 0   
+BEGIN   
+                     
+                    IF RTRIM(LTRIM(UPPER(@SERVERNAME))) = 'OLDSMTP'   --- Put Existing Server Name
+                    BEGIN
+                                        PRINT 'VALIDATE : ' + @SERVERNAME
+
+                                        SELECT @ACCOUNTNAME = A.NAME, @EMAIL=A.EMAIL_ADDRESS, @DISPLAYNAME= A.DISPLAY_NAME, @REPLYADDRESS=A.REPLYTO_ADDRESS, @DESCRIPTION = A.DESCRIPTION 
+                                        FROM MSDB.DBO.SYSMAIL_PROFILEACCOUNT PA JOIN MSDB.DBO.SYSMAIL_PROFILE P ON PA.PROFILE_ID = P.PROFILE_ID 
+                                        JOIN MSDB.DBO.SYSMAIL_ACCOUNT A ON PA.ACCOUNT_ID = A.ACCOUNT_ID 
+                                        JOIN MSDB.DBO.SYSMAIL_SERVER S ON A.ACCOUNT_ID = S.ACCOUNT_ID WHERE P.NAME = @PROFILENAME AND S.SERVERNAME LIKE '%SMTP%'
+                    
+                    --                 DELETING EXISTING ACCOUNT TAGED WITH SMTP
+                                        PRINT 'DELETING ACCOUNT : ' + @ACCOUNTNAME
+                                        EXECUTE MSDB.DBO.SYSMAIL_DELETE_ACCOUNT_SP @ACCOUNT_NAME = @ACCOUNTNAME
+
+                    --                 CREATIMNG NEW EMAIL ACCOUNT WITH NewSMTP
+                                        PRINT 'CREATING ACCOUNT : ' + @ACCOUNTNAME
+
+                                        EXECUTE MSDB.DBO.SYSMAIL_ADD_ACCOUNT_SP
+                                        @ACCOUNT_NAME = @ACCOUNTNAME,
+                                        @EMAIL_ADDRESS = @EMAIL,
+                                        @MAILSERVER_NAME = @NEWSMTPSERVERNAME,
+                                        @PORT=25,
+                                        @DESCRIPTION = @DESCRIPTION,
+                                        @DISPLAY_NAME = @DISPLAYNAME,   
+                                        @REPLYTO_ADDRESS = @REPLYADDRESS
+
+                    --                 PROFILE ASSOCIATION WITH RESPECTIVE ACCOUNT
+                                        PRINT 'JOINING ACCOUNT : ' + @ACCOUNTNAME + 'PROFILE : ' + @PROFILENAME
+
+                                        EXECUTE MSDB.DBO.SYSMAIL_ADD_PROFILEACCOUNT_SP
+                                        @PROFILE_NAME = @PROFILENAME,
+                                        @ACCOUNT_NAME = @ACCOUNTNAME,
+                                        @SEQUENCE_NUMBER = 1;
+
+                                        
+                    --                 SAMPLE EMAIL
+                                        PRINT 'SENDING CONFIRMATION MAIL : ' + @SAMPLEMAILID
+
+                                        DECLARE @BODY NVARCHAR(200)
+                                        SET @BODY  = 'DBMAIL SUCCESSFULLY CONFIGURED ON ''NEWSMT'' for : ' + CAST (@PROFILENAME as VARCHAR(50)) + '\' + CAST (@ACCOUNTNAME as VARCHAR(50))        
+                                        SET @BODY = @BODY + '<BODY><BR><BR><COLOR = ''BLUE''><HR> SAMPLE MAIL SEND TO : <B COLOR ''RED''>'+ CAST(@SAMPLEMAILID as VARCHAR(50)) +'</B><BR><BR><HR></COLOR><BODY>'
+
+                    --                 PRINT @BODY  
+                                                            
+                                        EXEC MSDB.DBO.SP_SEND_DBMAIL
+                                        @PROFILE_NAME = @PROFILENAME,
+                                        @RECIPIENTS = @SAMPLEMAILID,
+                                        @BODY = @BODY,
+                                        @SUBJECT = 'DBMAIL SUCCESSFULLY CONFIGURED',
+                                        @BODY_FORMAT = 'HTML'
+
+                    END
+                    ELSE
+                                        PRINT 'NO MATCH FOUND.... ‘OldSMTP’'
+                                        
+    FETCH NEXT FROM SMTPCHK INTO @PROFILENAME   
+
+END   
+
+CLOSE SMTPCHK   
+DEALLOCATE SMTPCHK

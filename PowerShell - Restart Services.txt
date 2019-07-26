@@ -1,0 +1,113 @@
+PowerShell - Restart Services
+
+http://www.sqlservercentral.com/scripts/powershell/87230/
+
+ Why: Recently we had a server issue where Server A's service required a restart, the service was not listed as Stopped but was not in an operable state to which we received the call out to ensure the service on Server B was restarted due to a vague dependency on Server A. Once back in work the next morning I decided to write a script which would help aid anyone who was on call out so that we (DBA team) didn't have to be called out in the early hours of the morning.
+
+Function: The code basically goes away with a list of Servers/Services and runs a set of verification (i.e. is the server alive) and then attempts to restart the service regardless of the service state, any errors during any part of the processing will result in an email being generated and a break out of code ensuring that no further code is run (since you may have dependencies).
+
+My Example: In my example we were having issues with a VMware service which had ties to NetApp storage which then had a knock on affect on our FlexClone process which we use to present reports to users on a regular refresh. To which point I would need to alter the script in the following way:
+
+FuncRestartService "Server1" "VMwareService"
+
+FuncRestartService "Server2" "SQLSERVICE"
+
+You can put as many servers/services as you wish, just add another line as you go and it will treat the next line with a dependency on the previous.
+
+My intent was with this that if the service/s was scheduled to restart then it could be done with this script therefore restarting any service that I may require on any other server, but this could be request on demand if required and still ensure that my services are up and running.
+
+If you wanted to run this from SQL I'd suggest setting it up as a job and using the following code to reference the script, changing locations where needed:
+
+ PowerShell –Command “& { C:\flexscript\RestartServiceV1.ps1; exit $LASTEXITCODE}”
+
+Since this does restart services, do be careful as to which servers/services you're restarting! 
+
+
+######################################################################################################################
+## Name: RestartService.ps1
+## Function: Restart the service/s on any given server
+##Version: 1
+##Author : RT
+##Usage: Admin/Advanced only
+##Notes: Call in order the server/service you want to restart e.g. FuncRestartService "Server1" "MSSQLSRV01",
+## ensure that the SMTP/email settings are correct. 
+######################################################################################################################
+
+##################
+## FUNCTIONS
+##################
+function FuncMail 
+{#param ($strTo, $strFrom, $strSubject, $strBody, $smtpServer)
+param($To, $From, $Subject, $Body, $smtpServer)
+$msg = new-object Net.Mail.MailMessage
+$smtp = new-object Net.Mail.SmtpClient($smtpServer)
+$msg.From = $From
+$msg.To.Add($To)
+$msg.Subject = $Subject
+$msg.IsBodyHtml = 1
+$msg.Body = $Body
+$smtp.Send($msg)
+}
+
+function FuncRestartService ($server, $service) 
+{
+$intPingError = 0 
+$intError = 0
+
+$ping = new-object System.Net.NetworkInformation.Ping
+try
+{
+$rslt = $ping.send($server)
+}
+catch
+{
+$intPingError = 1
+$strError = $Error
+}
+if ($intPingError –eq 0) #sucess: ping
+{
+ write-host "...ping returned, running service restart"
+try
+{
+restart-Service -InputObject $(Get-Service -Computer $server -Name $service ) -force
+}
+catch
+{
+$intError = 1
+$strError = $Error
+}
+if ($intError -eq 1) #failure: restart - fully exit program
+{
+Write-Host "...an error occured, notifing by email"
+FuncMail -To $emTo -From $emFrom -Subject "Server: $server - Error" -Body "$server\$service restart was attempted but failed. Details: $strError" -smtpServer $emSMTP
+break
+}
+else #success: restart 
+{
+write-host "...finshed restarting service email sent"
+FuncMail -To $emTo -From $emFrom -Subject "Server: $server - Restart" -Body "$server\$service has been restarted" -smtpServer $emSMTP
+}
+}
+else #failure: ping - fully exit program
+{
+Write-Host "...ping failed, notifying via email"
+FuncMail -To $emTo -From $emFrom -Subject "Server: $server - Status" -Body "$server is not responding to ping, please investigate. Details: $strError" -smtpServer $emSMTP
+break
+}
+}
+##################
+## EMAIL Variables
+##################
+$emTo = 'To@Domain.com'
+$emFrom= 'From@Domain.com'
+$emSMTP= 'domain.com'
+
+##################
+## RUN Program
+##################
+Write-Host "Starting Program..."
+
+FuncRestartService "Server1" "ServiceOfSorts"
+FuncRestartService "Server2" "DependantService"
+
+Write-Host "...program complete"

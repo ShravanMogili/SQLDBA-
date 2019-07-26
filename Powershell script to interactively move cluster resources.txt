@@ -1,0 +1,226 @@
+Powershell script to interactively move cluster resources
+
+http://www.sqlservercentral.com/scripts/SQL+Server+2012/104214/
+
+ Every time Microsoft releases an important security OS patch I have to apply the same to some 16 clusters (32 nodes), even thouhg I have order list to patch the servers it becomes somehow complex to log on each node and failover/failback the nodes or the cluster resource groups.  
+
+So that I wrote this script to interactively move the resource between cluster nodes, this has added the value of logging each step and also confirmation of what pieces need to go where.
+
+This is how to do it:
+
+1.- Create a file list called "clusterlist.txt" and place it in the same folder as the script is.   This file should contain the clusters virtual names to work on.
+
+2.- Please enable delegation execution by using the following command :  
+
+enable-wsmancredssp -role client -delegatecomputer server.windowsdomain.com
+
+See screenshot below of illustrative issue when the previous feature is not enabled.
+
+3.- Once CreSSP is enabled execute the script from powershell like:
+
+powershell.exe -command ".\clustermove.ps1"
+
+4.- It will read the list of clusters from the file, if this does not exists, will read the cluster list from the active directory.   You need to have read permissios to browse cluster names, from your AD or network.
+
+5.- Follow interactive instructions on moving resource groups between nodes.
+
+Note : When the options of "move all resource groups at once", they will be moved to the next available node.  When choosing a particular group, you will get the list of nodes available so that you can select where to put the resource.
+
+
+
+
+
+
+
+#Author:  Rolando Hernandez  <rolando.marmolejo@gmail.com>
+#Description : Script to interactively move Cluster Resources between nodes.  Intended for Windows 2012, Windows Foundation Cluster 2012 and SQL Server 2012
+#Date created :  October 2013
+#notes: this script should be run using an domain account which also has administrator privileges on the cluster or on the nodes running the cluster.
+#        also please enable delegation execution by using the following command :   enable-wsmancredssp -role client -delegatecomputer server.windowsdomain.com
+# See screenshot in the article for better understanding of enable-wsmancredssp
+
+
+$listOfClusters  = @();
+$listOfNodes = @();
+$ActiveNote = ""
+$listOfGroups = @();
+$WorkingGroup = ""
+$Workingcluster = ""
+$WorkingclusterNum = ""
+$TargetNode = ""
+$i = 0
+
+
+function isNumeric ($x) {
+    $x2 = 0
+    $isNum = [System.Int32]::TryParse($x, [ref]$x2)
+    return $isNum
+}
+
+
+
+#determine the source for the list of clusters, from a file, or read from active directory
+if( Test-Path ".\clusterlist.txt"){
+        Write-Host "Cluster file found, reading cluster list from file [clusterlist.txt]..."
+	    $listOfClusters = Get-Content ".\clusterlist.txt"
+
+        foreach ($cluster in $listOfClusters){
+	        $ClusterHasValue = $cluster
+	        Write-Host "            [$i].- $ClusterHasValue ";	
+	        $i++	
+        }	
+        Write-Host "            [$i].- Exit this script ";
+
+        while( !(isNumeric($WorkingclusterNum)) ){
+	        $WorkingclusterNum = read-host " Type Cluster number to work on"
+        }
+
+        if(($WorkingclusterNum -ge 0) -and ($WorkingclusterNum -le ($i-1))  ){
+	        $Workingcluster = $listOfClusters[$WorkingclusterNum]
+        }
+        else{
+            Write-Host "Exit selected, or Invalid choice number.  Script halted"
+            break;
+        }
+}
+else{
+        Write-Host "Cluster file [clusterlist.txt] not found, reading cluster list from Active directory."    
+        write-host "From the following list of windows clusters, please input the cluster to failover:"
+	    $listOfClusters = get-cluster | select name
+
+        foreach ($cluster in $listOfClusters){
+	        $ClusterHasValue = $cluster.Name
+	        Write-Host "            [$i].- $ClusterHasValue ";	
+	        $i++	
+        }	
+        Write-Host "            [$i].- Exit this script ";
+
+        while( !(isNumeric($WorkingclusterNum)) ){
+	        $WorkingclusterNum = read-host " Type Cluster number to work on"
+        }
+
+
+        if(($WorkingclusterNum -ge 0) -and ($WorkingclusterNum -le ($i-1))  ){
+	        $Workingcluster = $listOfClusters[$WorkingclusterNum].Name
+        }
+        else{
+            Write-Host "Exit selected, or Invalid choice number.  Script halted"
+            break;
+        }
+}
+
+
+
+  
+    
+
+
+write-host
+Write-Host "For the cluster <<$Workingcluster>>, please select the group to want to failover :"
+
+$listOfGroups = Get-ClusterGroup -Cluster $Workingcluster | where State -eq "Online"
+
+
+$i=0
+foreach ($group in $listOfGroups){
+	$GroupName = $listOfGroups[$i].name
+	$GroupOwner = $listOfGroups[$i].OwnerNode
+	$GroupStatus = $listOfGroups[$i].State
+
+	Write-Host "            [$i].- $group         current node <$groupOwner>";
+	$i++
+}
+
+Write-Host ""
+Write-Host "            [$i].- ....Move all Resource groups to another available node (will be moved 1 at a time to the next available node)";
+$i++
+Write-Host "            [$i].- ....Exit this script";
+
+$WorkingGroup = "";
+while( !(isNumeric($WorkingGroup)) ){
+	$WorkingGroup = read-host ".....Enter the group you want to failover : "
+}
+
+
+if($WorkingGroup -gt ($listOfGroups.Length -1)){
+        
+    #option to move all resource groups was selected
+
+    if($WorkingGroup -eq $listOfGroups.Length){            
+
+        $moveAllGroups = Read-Host "Are you sure you want to move ALL the groups?... [Y/N]"
+
+        if( $moveAllGroups.ToUpper() -eq "Y" ){
+            Write-Host "Moving all groups to another node...";
+
+            $g=0;
+            foreach($group in $listOfGroups){
+                $GroupNameTmp = $listOfGroups[$g].name
+		        $GroupOwnerTmp = $listOfGroups[$g].OwnerNode
+		        $GroupStatusTmp = $listOfGroups[$g].State
+
+                write-host "   Now moving group < $GroupNameTmp > from node < $GroupOwnerTmp > to the next available node..."
+                Move-ClusterGroup –Name $GroupNameTmp -Cluster $Workingcluster;                
+                $g++;                
+            }
+
+            write-host "The following Groups : $listOfGroups... were moved succesfully."
+        }            
+        else{
+            Write-Host "[N] selected or invalid choice...exiting"
+        }
+    }
+
+    #exit was selected
+        if($WorkingGroup -ge $listOfGroups.Length+1){
+        Write-Host "Exiting script..."
+        break;
+    }
+
+}
+else{
+	
+        $GroupOwner = $listOfGroups[$WorkingGroup].OwnerNode
+	    $listOfNodes = Get-ClusterNode -cluster $Workingcluster | where Name -ne $GroupOwner			
+	
+        
+        $j=0;
+	
+	    if($listOfNodes.length > 1){
+
+		    foreach ($node in $listOfNodes){			
+			    write-host "[$j] ........ $node"
+                $j++
+		    }        
+
+            read-host "To which node number you want to move the resource ? "
+		    }
+	    else{
+		    $GroupName = $listOfGroups[$WorkingGroup].name
+        
+            $FailToNode = "";
+
+            while($FailToNode -eq ""){
+		        $FailToNode = read-host " The resource group <$GroupName> is currently running on node <$GroupOwner>, Do you want to move it to the node [$listOfNodes] ....Y/N: "            
+
+                switch ($FailToNode)
+                    {
+                    "Y" { 
+                            $TargetNode = $listOfNodes[0].Name;
+                            write-host "Moving  cluster group <$GroupName> to <$TargetNode>";
+                            Move-ClusterGroup –Name $GroupName -Node $TargetNode -Cluster $Workingcluster;
+                            Write-Host "Resource group $GroupName was moved to node $TargetNode succesfully...";
+
+                        }
+                    "N" {write-host "Resource group not moved...";}
+                    default { 
+                        write-host "invalid entry, please try again..."; 
+                        $FailToNode = "";
+                        }          
+                    }
+            
+            }
+    }
+}
+
+

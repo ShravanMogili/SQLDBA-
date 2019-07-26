@@ -1,0 +1,17 @@
+Move DTS packages to another server
+
+ the easiest way to transfer DTS packages is with bcp, not only works with 2000 but also will move to 2005 as well.
+
+
+
+on production 
+
+EXEC master.dbo.xp_cmdshell "bcp msdb.dbo.sysdtspackages out f:\DRTEST\DTS_Packages.txt -c"
+
+on DR
+
+EXEC master.dbo.xp_cmdshell "bcp msdb.dbo.sysdtspackages in f:\DRTest\DTS_Packages.txt -c -E -T"
+
+
+
+

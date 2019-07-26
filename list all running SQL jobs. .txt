@@ -1,0 +1,15 @@
+list all running SQL jobs. 
+
+
+
+--A simple query to list all running jobs.
+EXEC MSDB.DBO.SP_GET_COMPOSITE_JOB_INFO 
+NULL, NULL, NULL, NULL, NULL, NULL, 1, NULL, NULL 
+
+
+--Query to list all running jobs.  
+EXEC MSDB.DBO.SP_GET_COMPOSITE_JOB_INFO NULL, NULL, NULL, NULL, NULL, NULL, 1, NULL, NULL
+
+
+
+

@@ -1,0 +1,27 @@
+25 Nov
+
+By specifying the PAD_INDEX argument, you ensure that non-leaf level pages are also padded with the fillfactor setting. That means, the root and intermediate pages will also leave some sapce to fill with rows.
+Fill Factor
+Posted on 2009 under Index | Comments are off
+
+25 Nov
+
+Fillfactor will specify how full sql server should make each index page when it creates a new index using existing data.ie, it specify how full each page in the leaf level of an index should be. Index value can be from 0 thruough 100.
+
+*  Fill factor 100 implies the leaf Pages(ie;data pages if clustered index, else FID(FileID) +PN(Page Number) +RN (Row Number)) will be 100 percent full.
+
+*  Fill factor 0 implies, the leaf pages will be almost full, but SQL Server leaves some space within the upper level of the index tree. In both the cases even though it fills the leaf pages(data pages), the root and intermediate pages will still have room for two additional rows (1 root + 1 intermediate).
+
+*   Fill factor from 1 through 100, will be the percentage of each leaf page to fill with rows.
+
+”The fillfactor is used only when you create the index,it is not maintained over time.This value is not maintained after index creation, you index leaf pages may become full and experience many page splitting even you specify a very low value at the beginning.”
+
+Generally, when page splitting occurs, half of the data rows will be moved to the newly allocated data page, and half of the rows are remained on the original page. the Fill Factor is not maintained during the spliting. For example, if the Fill Factor is 40% full, in this case, the value is not maintained. One exception may be, when inserting a row containing variable-length columns, if this row is very large, more data rows will be kept on the other page to vacate space for this big-size row.
+
+Select an appropriate fill factor for each index. If the data has a minimal amount of changes to the middle of the table, configure the indexes to have a high fill factor, i.e., closer to 100%, which will save on the storage needed. If the data has many changes to the middle of the table, select a lower fill factor, i.e., 65% to 85%, so that as data is added to a page, page splitting is minimized until the indexes are rebuilt.
+
+Also,
+
+Fill factor 100%                      ==>  If DB is read only
+Fill factor b/w 50% and 70%   ==>  If DB is write intensive (writes greatly exceed reads)
+Fill factor b/w 80% to 90%      ==>  If DB is both read and write intensive

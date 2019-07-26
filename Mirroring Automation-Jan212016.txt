@@ -1,0 +1,234 @@
+http://www.sqlservercentral.com/scripts/Mirroring/132938/
+
+ Automatic Mirroring configuration for newly created user databases
+
+Instance name:
+
+Principle server  : X
+
+Mirroring Server  : Y
+
+Steps to follow:
+
+    Create link server between principle server and mirror server with RPC (Remote procedure call) set as true in order to execute the procedure.
+
+           Eg : lnk_X_Y_mirroring (Link server name)
+
+    Create below stored procedure in to principle server.
+    Schedule this Stored procedure (usp_Mirroring_Configuration) with 30mins/1hr interval based on business requirement via job
+    Once the new database created in server mirroring will be configured vis job execution.
+    Alert will be trigger ‘with the name of Mirroring Configuration
+
+Mail content:“Mirroring Configured for db_55555 and safety level is OFF”
+
+Hope this helps !
+
+Thanks,
+
+Vasan
+
+---------
+
+Manickavasagam Balu is working as a Database Administrator for ICON clinical research, global provider of outsourced development services to the pharmaceutical, biotechnology and medical device industries.
+   
+-- exec usp_Mirroring_Configuration    
+CREATE PROCEDURE [dbo].[usp_Mirroring_Configuration]     
+    
+AS    
+    
+    
+/*******************************************************************************                                    
+DESCRIPTION:   Automatic Mirroring_Configuration for new databases
+AUTHOR:   Vasan                                  
+DATE WRITTEN: 17 MARCH 2015  
+        
+Automatic Mirroring configuration for newly created user databases:
+-------------------------------------------------------------------
+Instance names:
+---------------
+Principle server  : X
+Mirroring Server  : Y
+
+Steps to follow:
+1.	Create link server between principle server and mirror server with RPC (Remote procedure call) set as true in order to execute the procedure.
+    Eg : lnk_X_Y_mirroring  (Link server name)
+2.	Create below stored procedure in to principle server.
+3.	Schedule this Stored procedure (usp_Mirroring_Configuration) with 30mins/1hr interval via job
+4.	Once the new database created in server mirroring will be configure.
+5.	Alert will be trigger with the subject anme of Mirroring Configuration
+Mail contect:“Mirroring Configured for db_55555 and safety level is OFF”  
+*******************************************************************************/       
+    
+Begin    
+    
+SET NOCOUNT ON;    
+    
+IF OBJECT_ID(N'tempdb..##tbl_new_databases') IS NOT NULL     
+    BEGIN      
+        DROP TABLE ##tbl_new_databases     
+    END     
+    
+Declare @dbname nvarchar(max)    
+Declare @Path nvarchar(500)    
+Declare @todiskbkp nvarchar(max)    
+Declare @todisklogbkp nvarchar(max)    
+Declare @SQL nvarchar(max)    
+Declare @count SMALLINT    
+Declare @SQLpartnerprimary nvarchar(max)    
+Declare @SQLmirror nvarchar(max)    
+Declare @Mirrorsaftey nvarchar(max)    
+-- Restore Part Variables    
+Declare @RestorePath nvarchar(500)    
+Declare @fromdiskbkp nvarchar(max)    
+Declare @fromdisklogbkp nvarchar(max)    
+Declare @SQLrestore nvarchar(max)    
+Declare @SQLpartnermirror nvarchar(max)    
+    
+--Mail Part    
+    
+DECLARE @tableHTML NVARCHAR(MAX) ;    
+DECLARE @bodyMsg nvarchar(max)    
+DECLARE @subject nvarchar(max)    
+     
+    
+SELECT A.name into ##tbl_new_databases   
+FROM    
+sys.databases A INNER JOIN sys.database_mirroring B    
+ON A.database_id=B.database_id    
+WHERE a.database_id > 4 and  B.mirroring_state is NULL and A.is_read_only=0  and state_desc='ONLINE'  
+    
+    
+if (Select COUNT(*) from ##tbl_new_databases)>0    
+Begin    
+    
+DECLARE DB CURSOR FOR     
+    
+-- Fetching newly created database to configure mirroring    
+    
+Select name from ##tbl_new_databases    
+    
+    
+OPEN DB     
+FETCH NEXT FROM DB INTO @dbname    
+WHILE @@FETCH_STATUS=0    
+BEGIN    
+ -- changing recovery model from Simple to Full for new database since new database created with simple recovery model
+ 
+set @sql= 'if (SELECT recovery_model_desc FROM sys.databases where name = '''+@dbname+''' ) = ''SIMPLE''    
+           begin     
+           Use master    
+           ALTER DATABASE '+@dbname+' SET RECOVERY FULL WITH NO_WAIT    
+           end'    
+ --print @sql              
+EXEC master.dbo.sp_executesql @SQL    
+    
+-- Setting Backup folder path for primary server  
+--(Backup should be placed some common path or with in mirror server for easy recovery process) here i chose mirror server local drive
+Set @dbname=@dbname    
+Set @Path='\\Mirror Server Name (Y)\d$\backup\'+@dbname    
+set @todiskbkp=@Path+'\'+@dbname+'_'+ replace(CONVERT(VARCHAR(11),GETDATE(),106),' ','')+'.bak'    
+set @todisklogbkp=@Path+'\'+@dbname+'_'+ replace(CONVERT(VARCHAR(11),GETDATE(),106),' ','')+'.trn'    
+    
+-- Creating new backup folder for new db in Mirror server   
+EXEC master.dbo.xp_create_subdir @Path    
+    
+--Create Database Backups for new db    
+    
+set @SQL= '    
+    
+BACKUP DATABASE ' +@dbname+'    
+TO DISK = '''+@todiskbkp+'''    
+WITH FORMAT;    
+    
+BACKUP LOG ' +@dbname+'    
+TO DISK ='''+@todisklogbkp+'''    
+WITH FORMAT;    
+'    
+    
+--Print @SQL    
+    
+EXEC master.dbo.sp_executesql @SQL    
+    
+--Restoring the new dataabse to Mirror server
+   
+-- Setting Restor path for mirror server    
+Set @RestorePath='D:\backup\'+@dbname    
+set @fromdiskbkp=@RestorePath+'\'+@dbname+'_'+ replace(CONVERT(VARCHAR(11),GETDATE(),106),' ','')+'.bak'    
+set @fromdisklogbkp=@RestorePath+'\'+@dbname+'_'+ replace(CONVERT(VARCHAR(11),GETDATE(),106),' ','')+'.trn'    
+    
+--Create the Mirror Database (restoring the new database backup into mirror server)
+    
+set @SQLrestore='    
+RESTORE DATABASE '+@dbname+' FROM  DISK = N'''+@fromdiskbkp+''' WITH  FILE = 1,    
+MOVE N'''+@dbname+''' TO N''D:\data\'+@dbname+'.mdf'',    
+MOVE N'''+@dbname+'_log'' TO N''D:\log\'+@dbname+'.LDF'',    
+NORECOVERY,  NOUNLOAD,  REPLACE,  STATS = 10    
+    
+RESTORE LOG '+@dbname+' FROM  DISK = N'''+@fromdisklogbkp+'''    
+WITH  FILE = 1,  NORECOVERY,  NOUNLOAD,  STATS = 10    
+'    
+    
+--print @SQLrestore    
+    
+EXEC lnk_X_Y_mirroring.master.dbo.sp_executesql @SQLrestore    
+    
+--Listener Port on mirror server    
+set @SQLpartnermirror= '    
+ALTER DATABASE '+@dbname+'    
+SET PARTNER=''tcp://Domain Name:Port Number'';   
+'    
+    
+--print @SQLpartnermirror    
+    
+EXEC lnk_X_Y_mirroring.master.dbo.sp_executesql @SQLpartnermirror    
+    
+--Listener Port on principal server    
+set @SQLpartnerprimary='    
+ALTER DATABASE '+@dbname+'    
+SET PARTNER=''tcp://Domain Name:Port Number'';'    
+    
+EXEC master.dbo.sp_executesql @SQLpartnerprimary    
+    
+--Print @SQLpartnerprimary    
+    
+--Set Mirroring Operating Mode to “High Performance”    
+    
+set @Mirrorsaftey='    
+ALTER DATABASE '+@dbname+'  SET SAFETY OFF     
+'    
+--print @SQLpartnermirror    
+EXEC master.dbo.sp_executesql @Mirrorsaftey    
+    
+FETCH NEXT FROM DB INTO @DBNAME    
+END    
+CLOSE DB    
+DEALLOCATE DB    
+    
+    
+    
+EXEC msdb.dbo.sp_send_dbmail                                
+@profile_name = 'DBAProfile',                                
+@recipients   = 'xyz@gmail.com',                                
+@subject = 'Mirroring Configuration',     
+@query='set nocount on SELECT ''Mirroring Configured for ''+ A.name +'' and safety level is ''+ B.[mirroring_safety_level_desc] COLLATE Latin1_General_CI_AI
+FROM    
+sys.databases A 
+INNER JOIN sys.database_mirroring B    
+ON A.database_id=B.database_id    
+WHERE a.database_id > 4 AND A.name in (Select name from ##tbl_new_databases)',    
+@query_result_no_padding     =0,                 
+@query_result_width          = 32767,             
+@query_no_truncate           = 1,      
+         
+@attach_query_result_as_file = 0,              
+@Body_format = 'text' ,          
+@append_query_error          = 1    
+    
+    
+Drop table ##tbl_new_databases    
+    
+END    
+END    
+
+
+

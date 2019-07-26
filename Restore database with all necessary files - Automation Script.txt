@@ -1,0 +1,211 @@
+--Restore database with all necessary files
+
+http://www.sqlservercentral.com/scripts/Restore/61810/
+
+ This stored procedure creates the script to restore your database with the information existing in [msdb] database.
+It helps you by finding the last FULL backup, the last DIFFERENTIAL backup and all the TRANSACTION LOG backups needed.
+It's quite comfortable when you are doing so many differential or log backups. I hope you enjoy it!!!
+
+Notes:
+
+- Of course, this script is AS IS, and there's no warranty, etc ...
+
+- The database name is implicit. You have to create the stored procedure in each database you want to script the backup. This change
+    is due to the SELECT on SYS.DATABASE_FILES to get the NAME and PHYSICAL_NAME of the database, that you must be in the database.
+
+- The script gets the backup information from msdb database. You should be carefull that in your maintenance plan you should
+    clean the msdb's history with a retention of more days than between full backups. If you do a full backup every weekend,
+    the history retention in msdb should be higher, for example 15 days, to allow the query to get the full backup information.
+
+Parameters:
+- @Days: how many days back in the records you want to list backups look for. Must be bigger than the days between full backups. By default set to 20 (old enought I think)
+- @WithMove: 1 or 0; 1=include a "move xx to yy" statement.
+- @WithStats: 1 or 0; 1=include a "STATS=1" statement
+
+It is not case sensitive unless your collation is.
+
+Examples:
+- EXEC dbo.CreateRestoreScript
+- EXEC dbo.CreateRestoreScript @Days=20, @WithMove=1, @WithStats=1
+- EXEC dbo.CreateRestoreScript @Days=30, @WithMove=0, @WithStats=0
+
+Scripting it with Powershell to save the result in a file:
+    &"sqlcmd" ("-d", "myDatabase", "-Q", "EXEC dbo.CreateRestoreScript") | Set-Content (Join-Path "C:\Temp\" "restoreScript_$((get-date).ToString("yyyyMMdd_HHmmss")).sql")
+
+
+
+
+
+
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+/*
+-- =============================================
+-- Author:		Josep Martínez
+-- Based on:	the script done by [jtshyman] named "List SQL backups"
+-- Added improvements made by: henrik staun poulsen
+-- Version: 2
+-- Date: 26/09/2012
+-- Script: http://www.sqlservercentral.com/scripts/Restore/61810/
+-- Description:	This stored procedure creates the script to restore your database with the information existing in [msdb] database.
+It helps you by finding the last FULL backup, the last DIFFERENTIAL backup and all the TRANSACTION LOG backups needed.
+It's quite comfortable when you are doing so many differential or log backups. I hope you enjoy it!!!
+
+Notes:
+- Of course, this script is AS IS, and there's no warranty, etc ...
+- The database name is implicit. You have to create the stored procedure in each database you want to script the backup. This change
+	is due to the SELECT on SYS.DATABASE_FILES to get the NAME and PHYSICAL_NAME of the database, that you must be in the database.
+- The script gets the backup information from msdb database. You should be carefull that in your maintenance plan you should
+	clean the msdb's history with a retention of more days than between full backups. If you do a full backup every weekend, 
+	the history retention in msdb should be higher, for example 15 days, to allow the query to get the full backup information.
+
+Parameters:
+- @Days: how many days back in the records you want to list backups look for. Must be bigger than the days between full backups. By default set to 20 (old enought I think)
+- @WithMove: 1 or 0; 1=include a "move xx to yy" statement.
+- @WithStats: 1 or 0; 1=include a "STATS=1" statement
+
+It is not case sensitive unless your collation is.
+
+Examples:
+- EXEC dbo.CreateRestoreScript
+- EXEC dbo.CreateRestoreScript @Days=20, @WithMove=1, @WithStats=1
+- EXEC dbo.CreateRestoreScript @Days=30, @WithMove=0, @WithStats=0
+
+Scripting it with Powershell to save it in a file:
+	&"sqlcmd" ("-d", "myDatabase", "-Q", "EXEC dbo.CreateRestoreScript") | Set-Content (Join-Path "C:\Temp\" "restoreScript_$((get-date).ToString("yyyyMMdd_HHmmss")).sql")
+*/
+-- ==============================================================================================================================================================================
+CREATE PROCEDURE dbo.CreateRestoreScript 
+	-- Add the parameters for the stored procedure here 
+	@Days INT = 20,		-- I think that's old enough
+	@WithMove BIT = 1,  -- 1 or 0; 1=include a "move xx to yy" statement. "1" requires that dbname is the current database
+	@WithStats BIT = 1  -- 1 or 0; 1=include a "STATS=1" statement
+AS
+BEGIN
+	-- SET NOCOUNT ON added to prevent extra result sets from interfering with SELECT statements.
+	-- Important because we're going to 'print' the sql code for the restore
+	SET NOCOUNT ON;
+
+	DECLARE @DBName sysname, @Move VARCHAR(MAX), @Stats VARCHAR(20)
+	SET @Move=''
+	SET @DBName = DB_NAME() 
+	
+	IF (@WithMove = 1)
+	BEGIN
+		SELECT @Move = @Move + 'MOVE ''' + RTRIM(NAME) + ''' TO ''' + RTRIM(Physical_Name) + ''', ' + CHAR(13)
+			FROM sys.database_files
+		IF (LEN(@Move) > 2)
+			SET @Move = LEFT(@Move, LEN(@Move)-2)
+	END
+
+	IF (@WithStats=1)
+		SET @Stats = 'STATS=1,'
+	ELSE SET @Stats=''
+
+	CREATE TABLE #BackupsHistory
+	(
+		id INT IDENTITY(1,1),
+		backup_start_date DATETIME,
+		backup_type CHAR(1),
+		physical_device_name VARCHAR(2000)
+	)
+
+	INSERT INTO #BackupsHistory (backup_start_date, backup_type, physical_device_name)
+		SELECT S.backup_start_date,
+		S.type,
+		M.physical_device_name
+	FROM msdb..backupset S
+	JOIN msdb..backupmediafamily M ON M.media_set_id=S.media_set_id
+	WHERE S.database_name = @DBName
+	AND DATEDIFF(DAY,S.backup_start_date,GETDATE()) < @Days
+	ORDER by backup_start_date
+
+	-- If there's no backup, we rise an exception
+	IF ((SELECT COUNT(*) FROM #BackupsHistory) = 0)
+	    RAISERROR ('Database [%s] has no backup!', 16, 1, @DBName)
+	ELSE
+	BEGIN
+		DECLARE @lastFullBackup INT, @lastFullBackupPath VARCHAR(2000), @lastDifferentialBackup INT, @lastDifferentialBackupPath VARCHAR(2000)
+
+		-- We get the last Full backup done. That where we are going to start the restore process
+		SET @lastFullBackup = (SELECT TOP 1 id FROM #BackupsHistory WHERE backup_type='D' ORDER BY backup_start_date DESC)
+		SET @lastFullBackupPath = (SELECT physical_device_name FROM #BackupsHistory WHERE id=@lastFullBackup)
+
+		-- Restoring the Full backup
+		PRINT 'RESTORE DATABASE ' + @DBName
+		PRINT 'FROM DISK=''' + @lastFullBackupPath + ''''
+		PRINT 'WITH '
+
+		IF (@WithMove =1)
+			PRINT @Move
+
+		IF (@WithStats=1) 
+			PRINT @Stats
+
+		-- IF it's there's no backup (differential or log) after it, we set to recovery
+		IF (@lastFullBackup = (SELECT MAX(id) FROM #BackupsHistory))
+			PRINT 'RECOVERY'
+		ELSE PRINT 'NORECOVERY'
+
+		PRINT 'GO'
+		PRINT ''
+
+
+		-- We get the last Differential backup (it must be done after the last Full backup)
+		SET @lastDifferentialBackup = (SELECT TOP 1 id FROM #BackupsHistory WHERE backup_type='I' AND id>@lastFullBackup ORDER BY backup_start_date DESC)
+		SET @lastDifferentialBackupPath = (SELECT physical_device_name FROM #BackupsHistory WHERE id=@lastDifferentialBackup)
+
+		-- IF there's a differential backup done after the full backup we script it
+		IF (@lastDifferentialBackup IS NOT NULL)
+		BEGIN
+			-- Restoring the Full backup
+			PRINT 'RESTORE DATABASE ' + @DBName
+			PRINT 'FROM DISK=''' + @lastDifferentialBackupPath + ''''
+			PRINT 'WITH '
+			IF @WithStats=1 
+				PRINT @Stats
+
+			-- IF it's there's no backup (differential or log) after it, we set to recovery
+			IF (@lastDifferentialBackup = (SELECT MAX(id) FROM #BackupsHistory))
+				PRINT 'RECOVERY'
+			ELSE PRINT 'NORECOVERY'
+
+			PRINT 'GO'
+			PRINT ''
+		END
+
+
+		-- For TRANSACTION LOGs
+		DECLARE @i INT, @logBackupPath VARCHAR(2000)
+		IF (@lastDifferentialBackup IS NULL)
+			SET @i = @lastFullBackup + 1
+		ELSE SET @i = @lastDifferentialBackup + 1
+
+		-- Here whe are scripting the restores for the necessary logs
+		WHILE (@i <= (SELECT MAX(id) FROM #BackupsHistory))
+		BEGIN
+			SET @logBackupPath = (SELECT physical_device_name FROM #BackupsHistory WHERE id=@i)
+			PRINT 'RESTORE LOG ' + @DBName
+			PRINT 'FROM DISK=''' + @logBackupPath + ''''
+			PRINT 'WITH '
+			IF (@WithStats=1)
+				PRINT @Stats
+
+
+			-- IF it's the last transaction log, we'll say it to recover
+			IF (@i = (SELECT MAX(id) FROM #BackupsHistory))
+				PRINT 'RECOVERY'
+			ELSE PRINT 'NORECOVERY'
+
+			PRINT 'GO'
+			PRINT ''
+
+			SET @i = @i + 1
+		END
+	END
+
+	DROP TABLE #BackupsHistory
+END
+

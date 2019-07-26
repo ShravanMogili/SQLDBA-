@@ -1,0 +1,26 @@
+Recent Restore History
+
+ Simply execute on your instance to receive the most recent info about any database restores that have taken place on the server.
+
+SET NOCOUNT ON
+SELECT
+	 destination_database_name
+	,bmf.physical_device_name
+	,restore_date	
+FROM		msdb.dbo.restorehistory
+INNER JOIN	msdb.dbo.backupset			as bs	ON bs.backup_set_id	= msdb.dbo.restorehistory.backup_set_id
+INNER JOIN	msdb.dbo.backupmediafamily	as bmf	ON bs.media_set_id	= bmf.media_set_id 
+WHERE restore_history_id IN 
+	(
+	SELECT MAX(restore_history_id)
+	FROM msdb.dbo.restorehistory
+	WHERE restore_type = 'D' 
+	AND destination_database_name IN 
+		(
+		SELECT DISTINCT destination_database_name 
+		FROM msdb.dbo.restorehistory
+		)
+	GROUP BY destination_database_name 
+	)
+ORDER BY restore_date DESC
+SET NOCOUNT OFF

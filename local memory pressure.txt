@@ -1,0 +1,37 @@
+local memory pressure
+
+ /* -----EXPLANATION-----
+http://technet.microsoft.com/en-us/library/cc293624.aspx
+If any single cache store grows too big, it indicates local memory pressure and SQL Server will start removing entries from that 
+store only. This behavior prevents one store from using too much of the total system memory.
+If a cache store reaches 75 percent of the cache plan pressure limit, described in Table 5-3, in single-page allocations or 50 
+percent of the cache plan pressure limit in multipage allocations, internal memory pressure is triggered and plans will be removed 
+from cache. For example, in the situation above we computed the cache plan pressure limit to be 5.4 GB. If any cache store exceeds 
+75 percent of that value, or 4.05 GB in single-page allocations, internal memory is triggered. If adding a particular plan to cache 
+causes the cache store to exceed the limit, the removal of other plans from cache will happen on the same thread as the one adding 
+the new plan, which can cause the response time of the new query to be increased.
+In addition to memory pressure occurring when the total amount of memory reaches a particular limit, SQL Server also indicates memory 
+pressure when the number of plans in a store exceeds four times the hash table size for that store, regardless of the actual size of 
+the plans. The queries below can be used to determine the number of buckets in the hash tables for the object store and the SQL store, 
+and the number of entries in each of those stores.
+*/
+
+
+SELECT
+      type AS 'plan cache store'
+    , buckets_count
+FROM
+      sys.dm_os_memory_cache_hash_tables
+WHERE
+      type IN ( 'CACHESTORE_OBJCP' , 'CACHESTORE_SQLCP' ); 
+
+
+SELECT
+      type
+    , COUNT(*) total_entries
+FROM
+      sys.dm_os_memory_cache_entries
+WHERE
+      type IN ( 'CACHESTORE_SQLCP' , 'CACHESTORE_OBJCP' )
+GROUP BY
+      type;

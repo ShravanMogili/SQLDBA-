@@ -1,0 +1,81 @@
+If, like me, you are constantly restoring/moving several databases between multiple environments (development to staging, production to training, etc.), you know how tedious it can get to use EM, or to manually type out all those RESTORE...WITH MOVE statements in QA.
+
+Even having a saved script isn't the ideal thing, as you still need to go in and change the database names and filenames for each restore; which often means having to run sp_helpdb for each database to get the MOVE TO path.
+
+The following sproc provides a dynamic and automated way to restore specified databases (or all user databases), including the requisite MOVE statements.  Enter a comma-delimited string of the databases you want to restore, or 'all' of you want to restore all user DBs.
+
+Syntax: exec sp_RestoreDBS 'northwind,pubs'
+OR: exec_sp_RestoreDBS 'all'
+
+sp_Restore also has parameters for file paths, filenames, and suffixes, which you can set to your environment defaults.
+
+Note: executing the sproc doesn't actually perform the restore; instead it generates the restore script which you can copy/paste into a new QA window and run.  I did it this way because database restores are an extremely sensitive operation, and it's good to know exactly what code is being run against your databases. 
+
+
+
+
+create procedure sp_RestoreDBs
+
+/* make sure QA is in "Results in Text" mode or "Results to File" mode when you execute */
+
+@DBString nvarchar(4000), /* comma-delimited string of databases to restore; 'all' = all user databases */
+@BackupFilePath nvarchar(4000) = '\\bhdbdev\e$\',
+@BackupFileSuffix sysname = '.bak',
+@LogicalDataFileSuffix sysname = '_Data',
+@LogicalLogFileSuffix sysname = '_Log',
+@PhysicalDataFileSuffix sysname = '_Data.mdf',
+@PhysicalLogFileSuffix sysname = '_Log.ldf'
+
+/* note: you can change these default parameter values to match your environment in order to make your work easier */
+
+as
+
+set nocount on
+
+if @DBString = 'all' or @DBString is null
+begin 
+/* grab comma-delimited list of all user databases */
+
+select @DBString = 
+isnull(nullif(@DBString, 'all') + ',', '') + name
+from sysdatabases
+where name not in ('master', 'model', 'msdb', 'tempdb')
+
+end
+
+/* put individual database names in single quotes */
+
+set @DBString = replace(@DBString, ',', ''',''')
+
+/* add single quotes to beginning and end of string */
+
+set @DBString = '''' + @DBString + ''''
+
+/* put DBs in single user mode; 
+comment out 'with rollback immediate' if you are using SQL 7
+as this is not supported */
+
+exec('select ''alter database '' + name + ''
+set single_user
+with rollback immediate''
+from sysdatabases
+where name in (' + @DBString + ')')
+
+exec('select ''restore database '' + name + ''
+from disk = ''''' + @BackupFilePath + ''' + name + ''' + @BackupFileSuffix + '''''
+with move '''''' + name + ''' + @LogicalDataFileSuffix + ''''''' + '' to ''''' +
+''' + filename + '''''',
+move '''''' + name + ''' + @LogicalLogFileSuffix + ''''''' + '' to '''''' +
+replace(filename ,''' + @PhysicalDataFileSuffix + ''', ''' + @PhysicalLogFileSuffix + ''')' + ' + ''''''''
+from sysdatabases
+where name in (' + @DBString + ')')
+
+/* put DBs back in multi user mode */
+
+exec('select ''alter database '' + name + ''
+set multi_user''
+from sysdatabases
+where name in (' + @DBString + ')')
+
+
+

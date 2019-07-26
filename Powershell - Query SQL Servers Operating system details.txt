@@ -1,0 +1,142 @@
+Powershell - Query SQL Servers Operating system details
+
+http://www.sqlservercentral.com/scripts/powershell/96809/
+
+ This script was put together with various snippets I have found online as well as custom code to query your production Central Management Server.
+
+The script works through the CMS and gathers server information, including, disk allocation, OS Versions and patch levels, memory allocation and SQL Server edition information.
+
+I put this together as I am constantly asked by management to give them a report on what is being used and what SQL Servers resources are allocated to a specific environment, and the business I work for, we have hundreds of SQL Servers in various environments, so I decided to work efficiently and provide this information faster and efficiently.
+
+
+function GetServers
+{
+    $ServerInstance = "vypdbmon01"
+    $Database = "msdb"
+    $ConnectionTimeout = 30
+    $Query = "select server_name from dbo.systargetservers"
+    $QueryTimeout = 120
+
+    $conn=new-object System.Data.SqlClient.SQLConnection
+    $ConnectionString = "Server={0};Database={1};Integrated Security=True;Connect Timeout={2}" -f $ServerInstance,$Database,$ConnectionTimeout
+    $conn.ConnectionString=$ConnectionString
+    $conn.Open()
+    $cmd=new-object system.Data.SqlClient.SqlCommand($Query,$conn)
+    $cmd.CommandTimeout=$QueryTimeout
+    $ds=New-Object system.Data.DataSet
+    $da=New-Object system.Data.SqlClient.SqlDataAdapter($cmd)
+    $conn.Close()
+    $ds.Tables
+    $computer = $da.Fill($ds)
+
+    $server_list = @()
+
+    for ($i = 1; $i -le $ds.Tables[0].Rows.Count - 1; $i++)
+    {
+        $server_list += $ds.Tables[0].Rows[$i][0]
+    }
+    return $server_list
+}
+
+function GetSQLServerInfo($SqlServer){
+      
+    Invoke-Sqlcmd –ServerInstance $SqlServer –Database master –Query "
+    select @@servername as ServerName 
+    , @@version as SQLServerEdition" | export-csv -Append -path .\ProductionServers\ProductionSQLServer_SQLServerInformation.csv -noType
+} 
+
+function GetSQLServerDatabaseInfo($SqlServer){
+      
+    Invoke-Sqlcmd –ServerInstance $SqlServer –Database master –Query "
+    select 
+        @@servername as ServerName
+    ,	a.name 
+    ,	a.create_date
+    ,	a.collation_name
+    ,	a.user_access_desc
+    ,	a.recovery_model
+    ,	a.state_desc
+    ,	b.size
+    from sys.databases a
+    inner join sysaltfiles b on a.database_id = b.dbid
+" | export-csv -Append -path .\ProductionServers\ProductionSQLServer_SQLServerDatabaseInformation.csv -noType
+} 
+
+
+
+# Check to see if a directory exists for this machine, if not create one
+if (!(Test-Path -path .\ProductionServers\)) {
+New-Item .\ProductionServers\ -type directory
+}
+
+ 
+
+# populate recordset of servers from CMS database
+$servers = GetServers; $start = $true;
+
+ForEach ($server in $servers) {
+
+   
+            
+   # Ping the machine to see if it's on the network
+   $results = Get-WMIObject -query "select StatusCode from Win32_PingStatus where Address = '$server'"
+   $responds = $false
+
+
+
+    ForEach ($result in $results) {
+        # If the machine responds break out of the result loop and indicate success
+        if ($result.statuscode -eq 0) {
+            $responds = $true
+            break
+        }
+    }
+    #work through servers that are responding to ping request
+    If ($responds) {
+       
+        # Get ComputerSystem info and write it to a CSV file
+
+        gwmi -class Win32_ComputerSystem -computername $server | select Name,
+
+        Model, Manufacturer, Description, DNSHostName,
+
+        Domain, DomainRole, PartOfDomain, NumberOfProcessors,
+
+        SystemType, @{Name=”TotalPhysicalMemory (GB)”; Expression={[math]::round($($_.TotalPhysicalMemory/1gb), 2)}} | export-csv -Append -path .\ProductionServers\ProductionSQLServer_ComputerSystem.csv -noType
+
+
+        # Get OperatingSystem info and write it to a CSV file
+
+        gwmi -Class Win32_OperatingSystem -computername $server | select PSComputerName, Name,
+
+        Version, @{Name=”FreePhysicalMemory (GB)”; Expression={[math]::round($($_.FreePhysicalMemory/1gb), 2)}}, OSLanguage, OSProductSuite,
+
+        OSType, ServicePackMajorVersion, ServicePackMinorVersion |
+
+        export-csv -Append -path .\ProductionServers\ProductionSQLServer_OperatingSystem.csv -noType
+
+
+        # Get SQL Server Version info and write it to a CSV file
+        GetSQLServerInfo $server
+
+        # Get SQL Server Database Information per server and write it to a CSV file
+        GetSQLServerDatabaseInfo $server
+
+
+        # Get PhysicalMemory info and write it to a CSV file
+        gwmi -class Win32_PhysicalMemory -computername $server | select PSComputerName, Name,
+        @{Name=”Capacity (GB)”; Expression={[math]::round($($_.Capacity/1gb), 2)}}, DeviceLocator, Tag |
+        export-csv -Append -path .\ProductionServers\ProductionSQLServer_PhysicalMemory.csv -noType
+
+
+        # Get LogicalDisk info and write it to a CSV file
+
+        gwmi -Class Win32_LogicalDisk -computername $server | select PSComputerName, Name, VolumeName, @{Name=”Free Space (GB)”; Expression={[math]::round($($_.FreeSpace/1gb), 2)}},
+
+        @{Name=”Total Size (GB)”; Expression={[math]::round($($_.Size/1gb), 2)}}, FileSystem, Description, LastErrorCode | export-csv -Append -path .\ProductionServers\ProductionSQLServer_LogicalDisk.csv –noType
+
+        } else {
+        # Let the user know we couldn't connect to the server
+        Write-Output "$server is not responding"
+    }
+}

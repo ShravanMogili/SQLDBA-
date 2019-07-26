@@ -1,0 +1,71 @@
+What is database replication? What are the different types of replication you can set up in SQL Server?
+Replication is the process of copying or moving of data between databases on the same or different servers. 
+
+SQL Server supports the following types of replication scenarios: 
+1. Snapshot replication 
+2. Transactional replication (with immediate updating subscribers, with queued updating subscribers) 
+3. Merge replication 
+
+What is Snapshot ReplicationIn snapshot replication a snapshot of entire data is copied from publisher to the subscriber's database on regular interval. This kind of replication is used for replicating data that doesn’t change frequently. This replication is considered when amount of data to be replicated is small.
+
+What is Merge ReplicationIn merge replication allows both publisher and subscriber to work independently, online or offline and merges the changes later. In this merge replication changes are track on both publisher and subscriber and then merged.
+
+What is Transactional ReplicationTransactional replication is used when changes are frequent.
+The replication agent monitors the changes at the publisher and distributes the changes to the subscribers. Transactional Replication is required where up to date data is required 
+
+
+Define the terms used in Replication.
+Publisher:- Publisher is the database that transmits its data to another database.
+Subscriber:- Subscriber is the database that receives data from another database.
+Distributor:- Distributor manages the flow of data during data replication.Distribution Database:- Distribution database is the system database that stores snapshot jobs to be distributed to subscribers. 
+Push Subscription:- Push subscription is the subscription when data is pushed from publisher database to subscribing database.
+Pull Subscription:- Pull subscription is subscription when the subscribing database pulls the data from distribution database.
+
+Describe the replication agents that SQL Server supports.
+Snapshot Agent
+Log Reader Agent
+Distribution Agent
+Merge Agent
+ 
+The Snapshot Agent creates snapshot files and stores on the distribution database. It also keeps track of synchronization status in the distribution database. This is used in all kinds of replication.
+
+The Log Reader Agent moves transactions marked for replication from the transaction log on the Publisher to the distribution database. This is used in transactional replication.
+
+The Distribution Agent moves the snapshot jobs from the distribution database to Subscribers. This is used in Merged and transactional replication.
+
+The Merge Agent is an agent of merge replication that merges incremental data changes that have occurred since the initial snapshot was created 
+
+
+Describe in brief working of Replication. 1.  At first data and object is synchronized between publisher and subscribers.
+2.  The snapshot is created on the publisher and transmitted to subscribers.3.  All the subsequent changes on the publisher are stored in distribution database.
+4.  Subscriber receives the data either using push or pull mechanism as configured from distribution database   
+
+
+Can you explain in detail how transactional replication works?
+Transactional replication is implemented by the SQL Server Snapshot Agent, Log Reader Agent, and Distribution Agent. 
+
+
+1.  The Snapshot Agent prepares snapshot files containing schema and data of published tables and database objects, stores the files in the snapshot folder, and records synchronization jobs in the distribution database on the Distributor.
+2.  The Log Reader Agent monitors the transaction log of each database configured for transactional replication and copies the transactions marked for replication from the transaction log into the distribution database, which acts as a reliable store-and-forward queue. 
+3.  The Distribution Agent copies the initial snapshot files from the snapshot folder and the transactions held in the distribution database tables to Subscribers.
+4.  Incremental changes made at the Publisher flow to Subscribers according to the schedule of the Distribution Agent, which can run continuously for minimal latency, or at scheduled intervals. 
+5.  Because changes to the data must be made at the Publisher (when transactional replication is used without immediate updating or queued updating options), update conflicts are avoided. 
+6.  Ultimately, all Subscribers will achieve the same values as the Publisher. 
+7.  If immediate updating or queued updating options are used with transactional replication, updates can be made at the Subscriber, and with queued updating, conflicts might occur.  
+
+
+What are data type concerns during replications?
+1.  If it’s a transactional replication you have to include a “Timestamp” column.
+2.  If it’s merge replication you will need a “uniqueidentifier” column.
+
+
+What are the advantages and disadvantages of using Snapshot replication?
+Advantages:-
+1.  Simple to setup. If the database is small or you only want to replicate master data (State code, Pin code etc) it’s the best approach, as these values do not change heavily.
+2.  If you want to keep a tight control over when to schedule the data this is the best approach.
+For example you will like to replicate when the network traffic is low (probably during Saturday and Sunday).
+
+Disadvantages:
+1.  As data start growing the time taken to complete the replication will go on increasing.
+2.  Snapshot Replication It is like a Backup and Restore, and every time snapshot re-write the DB. Only Differance is It will take Specified articles which are Published.
+3.  By default the behavior is to drop the table and recreate and then bulk copy in the data. The level of locking you will see will be similar to when you bcp in data into a table.

@@ -1,0 +1,92 @@
+ You can use the output of this script to analyze how a database object and even a specific column are used in the database. The results of this script are similar to the View Dependencies feature of SQL Server Management Studio. This script can be useful when making schema changes by helping you understand the scope and potential impact of those changes.
+
+This script uses a few of SQL Server’s dynamic management views and functions. Part of the body of this script borrows from examples in Microsoft SQL Server Books Online (BOL).
+
+The permissions required to use these views and functions will likely be granted to someone making DDL changes. (They include VIEW DEFINITION and CONTROL permissions. See BOL for the specific permissions required.) In the event that the account you run this script as doesn’t have the required permissions, one or more result sets may be empty.
+
+To use the script, enter values for @SchemaQualifiedObjectName and (optionally) for @ColumnName, and execute it against a target database.
+
+--This script reports objects referencing and referenced by @SchemaQualifiedObjectName
+--@SchemaQualifiedObjectName is any schema-qualified object name (e.g., dbo.Customers, dbo.spGetCustomers, etc.)
+--When @ColumnName is specified, this script includes a result set that shows how the column is used
+
+declare @SchemaQualifiedObjectName sysname; set @SchemaQualifiedObjectName = '';
+declare @ColumnName sysname; set @ColumnName = '';
+
+--######################################################################################
+--There should be need to change anything below this line
+--######################################################################################
+
+if ((isnull(@SchemaQualifiedObjectName, '') = '') and (isnull(@ColumnName, '') = ''))
+begin
+	print 'Please enter a value for @SchemaQualifiedObjectName or @ColumnName or both.';
+	return;
+end;
+
+declare @TableName sysname;
+declare @SchemaDotPosition int;
+set @SchemaDotPosition = (CHARINDEX('.', @SchemaQualifiedObjectName, 0));
+if (@SchemaDotPosition <> 0)
+begin
+	set @TableName = SUBSTRING(@SchemaQualifiedObjectName, (@SchemaDotPosition+1), (LEN(@SchemaQualifiedObjectName)-@SchemaDotPosition)+1);
+end;
+
+if (not @SchemaQualifiedObjectName is null)
+begin
+	--Objects referenced
+	select
+		referenced_schema_name
+		,referenced_entity_name
+		,referenced_minor_name
+		,referenced_minor_id
+		,referenced_class_desc
+		,is_caller_dependent
+		,is_ambiguous
+	from sys.dm_sql_referenced_entities(@SchemaQualifiedObjectName, 'OBJECT') as e;
+	 
+	--Objects referencing
+	select
+		o.type_desc
+		,object_definition(referencing_id)
+		,o.modify_date
+		,referencing_entity_name
+		,referencing_class_desc
+	from sys.dm_sql_referencing_entities(@SchemaQualifiedObjectName, 'OBJECT') as e
+		  join sys.objects o on e.referencing_id = o.object_id;
+
+	--All constraints including the object name
+	select
+		schema_name(schema_id) as [schema_name],
+		object_name(parent_object_id) as [table_name],
+		object_name(object_id) as [constraint_name],
+		type_desc as [constraint_type]
+	from sys.objects
+	where type_desc LIKE '%CONSTRAINT'
+		and
+		(
+		object_name(parent_object_id) = @TableName
+		or
+		name like '%' + @TableName + '%'
+		);
+end;
+
+--All objects referencing the specified column
+--Note that this may not include all column dependencies
+--For example, columns used in temp tables or table variables or columns used in dynamic SQL
+if (not @ColumnName is null)
+begin
+	select distinct
+		o.name as [object_name]
+		,object_name(t.id) as [table_name]
+		,d.selall as [column_in_star_select] --Column is referenced via star select
+		,d.readobj as [column_read] --Column is being read
+		,d.resultobj as [column_updated] --Column is being updated
+	from sys.sysobjects o
+		join sys.sysdepends d on o.id = d.id
+		join sys.sysobjects t ON t.id = d.depid
+		join sys.syscolumns c ON c.colid = d.depnumber and c.id = d.depid
+	where c.name = @ColumnName
+		and (@TableName is null or t.name = @TableName)
+	order by o.name;
+end;
+

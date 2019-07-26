@@ -1,0 +1,33 @@
+Point in Time Database Recovery
+
+Recently one of my colleague at work informed that on development database he executed a DELETE query but forgot to place WHERE clause and committed the transaction. Though the database server was a development server but still they don’t want to miss any entry, that’s why they don’t want to restore database from full backup, which was taken three days ago.
+Thanks to point in time recovery option which helped us to restore our database without losing a single record to a specific time.
+For point in time recovery your database
+·  Must be in FULL RECOVERY MODEL
+·  Must have a valid FULL BACKUP
+What is current recovery model of your database?
+SELECT name,recovery_model_desc
+FROM sys.databases
+You can change recovery model from SSMS by right click on your desired database >>click properties -- > on left, select options and change recovery model. Or you can do it with following tsql.
+USE [master]
+GO
+ALTER DATABASE [AdventureWorks] SET RECOVERY FULL WITH NO_WAIT
+
+How to check backup history click here
+
+(After problem has occurred and you need a point in time recovery)
+1. You must check that your database is in full recovery model and valid FULL backup is already taken. Create a transaction log backup by using graphical interface or just executing following tsql.
+
+BACKUP LOG [AdventureWorks] TO DISK = N'E:\EmergencyLogBackup.trn' WITH
+NOFORMAT, NOINIT, NAME = N'AdventureWorks-Transaction Log  Backup', SKIP,
+NOREWIND, NOUNLOAD, STATS = 10  
+2.    Create a full backup of database for safe side.
+3.    Restore your full database backup BUT with “RESTORE WITH NORECROVERY” option
+4.    Now restore your currently created Transaction Log Backup, with “WITH RECOVERY” option, BUT up to your desired time. In our example we will restore our Transaction Log file up to 3:30PM.
+
+RESTORE LOG [AdventureWorks]
+FROM DISK = 'E:\EmergencyLogBackup.trn'
+WITH RECOVERY,
+STOPAT = 'Jan 03, 2011 03:30:00 PM'
+
+If you already have transaction log backup/s taken between your point of problem and Full Back. Restore your full back and then restore rest of your intermediate backups (Differential or Log) BUT all with “RESTORE WITH NORECROVERY” option. At the end restore your transaction log backup which you have created after PROBLEM OCCURRED, with “WITH RECOVERY” option. 

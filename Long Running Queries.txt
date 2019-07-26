@@ -1,0 +1,13 @@
+--Longest running query
+
+select top 10 db_name(dbid),
+total_worker_time/execution_count as avg_cpu_cost, plan_handle,
+execution_count,
+(select substring(text, statement_start_offset/2 + 1,
+(case when statement_end_offset = -1
+then len(convert(varchar(max), text))* 2
+else statement_end_offset end – statement_start_offset)/2)
+from sys.dm_exec_sql_text(sys.dm_exec_query_stats.sql_handle)) as query_text
+from sys.dm_exec_query_stats join sys.sysprocesses
+on sys.dm_exec_query_stats.sql_handle = sys.sysprocesses.sql_handle
+order by total_worker_time desc

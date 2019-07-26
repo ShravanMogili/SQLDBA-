@@ -1,0 +1,64 @@
+Read SQL Error logs
+
+This script allows you to reading the error logs from current/archive files without GUI interface.
+
+Supporting SQL Versions:2005,2008,2012 
+
+
+
+
+------------------------------------------------------------
+-- Drop temp tables if exists
+------------------------------------------------------------
+
+IF OBJECT_ID(N'tempdb..##tbl_sql_error_log') IS NOT NULL 
+    BEGIN  
+        DROP TABLE ##tbl_sql_error_log 
+    END 
+IF OBJECT_ID(N'tempdb..#ErrLogsDL') IS NOT NULL 
+    BEGIN  
+        DROP TABLE #ErrLogsDL 
+    END
+DECLARE @site_value INT;
+DECLARE @NumberOfLogfiles INT;
+
+------------------------------------------------------------
+-- Create temp table to hold results from xp_enumerrorlogs
+------------------------------------------------------------
+CREATE TABLE #ErrLogsDL
+(
+[Archive #] INT,
+[Date] VARCHAR(255),
+[Log File Size (Byte)] BIGINT
+)
+
+---------------------------------------------------------------
+-- Populate the temp table with
+-- the data returned by executing xp_enumerrorlogs
+---------------------------------------------------------------
+INSERT #ErrLogsDL([Archive #],[Date], [Log File Size (Byte)])
+EXEC master.dbo.xp_enumerrorlogs
+     
+SET @NumberOfLogfiles = (SELECT COUNT(*) FROM #ErrLogsDL);
+--print @NumberOfLogfiles
+
+------------------------------------------------------------------
+-- Create temp table to hold results from ##tbl_sql_error_log data
+------------------------------------------------------------------
+create table ##tbl_sql_error_log (LogDate datetime,Processinfo nvarchar(max),[text] nvarchar (max))
+
+SET @site_value = 0;
+WHILE @site_value < @NumberOfLogfiles
+BEGIN
+   insert into ##tbl_sql_error_log
+exec sp_readerrorlog @site_value
+SET @site_value = @site_value + 1;
+END;
+
+
+select*from ##tbl_sql_error_log
+--where text like '%corrupt%' or text like '%19-25%'
+order by logdate
+
+drop table ##tbl_sql_error_log
+drop table #ErrLogsDL

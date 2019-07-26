@@ -1,0 +1,129 @@
+--http://www.sqlusa.com/bestpractices/lastdatabasebackupdate/
+
+SELECT   DatabaseName = b.database_name,
+
+           LastBackupDate = a.backup_date,
+
+           PhysicalDeviceName = physical_device_name,
+
+           BackupSizeMB = convert(INT,backup_size),
+
+           DurationMinutes = duration
+
+  FROM     (SELECT   sd.name                    AS database_name,
+
+                     MAX(bs.backup_finish_date) AS backup_date
+
+            FROM     MASTER.dbo.sysdatabases sd
+
+                     LEFT OUTER JOIN msdb.dbo.backupset bs
+
+                       ON sd.name = bs.database_name
+
+                     LEFT OUTER JOIN (SELECT   sd.name       AS database_name,
+
+                                      MAX(bs.backup_finish_date)   AS backup_date,
+
+                                               bm.physical_device_name,
+
+                                       bs.backup_size / 1024 / 1024  AS backup_size,
+
+                                               DATEDIFF(mi,bs.backup_start_date,
+
+                                               bs.backup_finish_date) AS duration
+
+                                      FROM     MASTER.dbo.sysdatabases sd
+
+                                               LEFT OUTER JOIN msdb.dbo.backupset bs
+
+                                                 ON sd.name = bs.database_name
+
+                                     LEFT OUTER JOIN msdb.dbo.backupmediafamily bm
+
+                                                ON bm.media_set_id = bs.media_set_id
+
+                                      GROUP BY sd.name,
+
+                                               bm.physical_device_name,
+
+                                               bs.backup_size / 1024 / 1024,
+
+                                               DATEDIFF(mi,bs.backup_start_date,
+
+                                               bs.backup_finish_date)) Summary
+
+                       ON Summary.database_name = sd.name
+
+                          AND Summary.backup_date = bs.backup_finish_date
+
+            GROUP BY sd.name) a,
+
+           (SELECT   sd.name                    AS database_name,
+
+                     MAX(bs.backup_finish_date) AS backup_date,
+
+                     Summary.physical_device_name,
+
+                     Summary.backup_size,
+
+                     Summary.duration
+
+            FROM     MASTER.dbo.sysdatabases sd
+
+                     LEFT OUTER JOIN msdb.dbo.backupset bs
+
+                       ON sd.name = bs.database_name
+
+                     LEFT OUTER JOIN (SELECT   sd.name         AS database_name,
+
+                                 MAX(bs.backup_finish_date) AS backup_date,
+
+                                               bm.physical_device_name,
+
+                                  bs.backup_size / 1024 / 1024   AS backup_size,
+
+                                               DATEDIFF(mi,bs.backup_start_date,
+
+                                               bs.backup_finish_date) AS duration
+
+                                      FROM     MASTER.dbo.sysdatabases sd
+
+                                               LEFT OUTER JOIN msdb.dbo.backupset bs
+
+                                                 ON sd.name = bs.database_name
+
+                                      LEFT OUTER JOIN msdb.dbo.backupmediafamily bm
+
+                                              ON bm.media_set_id = bs.media_set_id
+
+                                      GROUP BY sd.name,
+
+                                               bm.physical_device_name,
+
+                                               bs.backup_size / 1024 / 1024,
+
+                                               DATEDIFF(mi,bs.backup_start_date,
+
+                                               bs.backup_finish_date)) Summary
+
+                       ON Summary.database_name = sd.name
+
+                          AND Summary.backup_date = bs.backup_finish_date
+
+            GROUP BY sd.name,
+
+                     bs.backup_finish_date,
+
+                     Summary.physical_device_name,
+
+                     Summary.backup_size,
+
+                     Summary.duration) b
+
+  WHERE    a.database_name = b.database_name
+
+           AND a.backup_date = b.Backup_date
+
+  ORDER BY DatabaseName
+
+GO

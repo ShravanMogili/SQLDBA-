@@ -1,0 +1,175 @@
+Merge Tables in SQL 2005
+
+1. First Create the Database
+
+2. Then create the tables
+
+3. Insert the data
+
+4. I would like to merge Table1, Table2 and Table3 based on matching ID's.
+
+Table Data is:
+
+Table1
+
+Table2
+
+Table3
+
+Destination
+
+ 
+
+5. The logic and the expected result is:
+
+IF ID is found THEN
+
+return field1 OR field2 OR field3 from Table1 OR Table2 OR Table 3
+
+ELSE
+
+return values from DESTINATION table
+
+END IF
+
+ 
+id 	field1 	field2 	field3
+1 	a 	b 	c
+2 	d 	e 	f
+3 	g 	h 	i
+4 	j 	k 	l
+
+ 
+
+6. The actual result we get after executing the query:
+
+
+
+
+
+-- Create Database
+CREATE DATABASE TUTORIAL
+GO
+
+-- create tables
+CREATE TABLE [dbo].[Table1](
+ [id] [int] NULL,
+ [field1] [varchar](50) 
+)
+GO
+CREATE TABLE [dbo].[Table2](
+ [id] [int] NULL,
+ [field2] [varchar](50) 
+)
+GO
+CREATE TABLE [dbo].[Table3](
+ [id] [int] NULL,
+ [field3] [varchar](50) 
+)
+GO
+CREATE TABLE [dbo].[destination](
+ [id] [int] NULL,
+ [field1] [varchar](50) NULL,
+ [field2] [varchar](50) NULL,
+ [field3] [varchar](50) NULL,
+ [current] [bit] NULL
+)
+GO
+
+-- Insert Data
+INSERT INTO dbo.Table1(id, field1)
+VALUES (1,'a')
+GO
+INSERT INTO dbo.Table1(id, field1)
+VALUES (3,'g')
+GO
+INSERT INTO dbo.Table1(id, field1)
+VALUES (4,'j')
+GO
+INSERT INTO dbo.Table2(id, field2)
+VALUES (1,'b')
+GO
+INSERT INTO dbo.Table2(id, field2)
+VALUES (2,'e')
+GO
+INSERT INTO dbo.Table2(id, field2)
+VALUES (4,'k')
+GO
+INSERT INTO dbo.Table3(id, field3)
+VALUES(1,'c')
+GO
+INSERT INTO dbo.Table3(id, field3)
+VALUES(2,'f')
+GO
+INSERT INTO dbo.Table3(id, field3)
+VALUES(3,'i')
+GO
+INSERT INTO dbo.destination (id, field1, field2, field3, [current])
+VALUES (2,'d','e','f', 'True')
+GO
+INSERT INTO dbo.destination (id, field1, field2, field3, [current])
+VALUES (3,'g','h','i', 'True')
+GO
+INSERT INTO dbo.destination (id, field1, field2, field3, [current])
+VALUES (4,'j','k','l', 'True')
+GO
+
+ -- Also we need to create a function similar to a NVL2 function in ORACLE.
+CREATE FUNCTION [dbo].[nvl2]
+(
+ @business_key varchar(100),
+ @source_value varchar(100),
+ @destination_value varchar(100)
+)
+RETURNS varchar(100)
+AS
+BEGIN
+ DECLARE @return varchar(100);
+ IF @business_key IS NULL
+ SET @return = @destination_value
+ ELSE
+ SET @return = @source_value
+ RETURN @return
+END
+
+ -- Now the source query to achieve this merge is:
+with cte_keys
+AS
+(
+select id
+from table1
+union
+select id
+from table2
+union
+select id
+from table3
+)
+
+select
+	a.id
+	-- using isnull
+,	isnull(one.field1,dest.field1) as isnull_field1 
+	-- using coalesce
+,	coalesce(one.field1,dest.field1) as coalesce_field1
+	-- using function dbo.nvl2(src key, src field, dest field)
+,	dbo.nvl2(one.id, one.field1, dest.field1) as fnc_field1
+
+,	isnull(two.field2,dest.field2) as isnull_field2
+,	coalesce(two.field2,dest.field2) as coalesce_field2
+,	dbo.nvl2(two.id, two.field2, dest.field2) as fnc_field2
+
+,	isnull(three.field3,dest.field3) as isnull_field3
+,	coalesce(three.field3,dest.field3) as coalesce_field3
+,	dbo.nvl2(three.id, three.field3, dest.field3) as fnc_field3
+
+from
+cte_keys a
+Left Join table1 one on a.id = one.id
+left join table2 two on a.id = two.id
+left join table3 three on a.id = three.id
+left join destination dest on a.id = dest.id and [current] = 'True'
+
+
+
+

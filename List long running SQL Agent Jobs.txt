@@ -1,0 +1,116 @@
+List long running SQL Agent Jobs
+
+
+http://www.sqlservercentral.com/scripts/SQL+Agent/102509/
+
+ This script will list long running SQL agent jobs and output the results into a HTML formatted email. I have this set up as a SQL Agent job which runs on every Monday morning against  our major severs. The results are then emailed to me.
+
+To use script a number of local variables will need to be set-up (ie email server info, search window size, duration time, etc.). Please refer to the comments in the code for further details.
+
+
+USE [MSDB]
+
+SET ANSI_NULLS ON;
+SET QUOTED_IDENTIFIER ON;
+GO
+
+-----------------------------------------------------------------------------
+-- Name:       LongRunningJobs.sql
+-- Author:     Neil Bryan
+-- Date:       20130925
+-- Description:List long runng SQL agent Jobs/steps
+--             Please note, the following local variables need to be set...
+--                @NumberOfDaysToGoBack 
+--                @EmailList 
+--                @EmailFormat 
+--                @EmailProfile
+--                @DurationTime
+--
+-- Amendments:
+-- -----------
+--
+-- Who                  When         Ref              Description
+-- ---                  ----         ---              -----------
+-- Neil Bryan           20130925                      Created.
+-- Neil Bryan           20130926                      Formatted output
+-----------------------------------------------------------------------------
+------------------------------------------------------------------------------------------------------------
+-- Locals
+------------------------------------------------------------------------------------------------------------
+DECLARE @GroundZeroDate INT;
+DECLARE @XML NVARCHAR(MAX);
+DECLARE @Body NVARCHAR(MAX);
+DECLARE @Subject NVARCHAR(MAX);
+DECLARE @EmailList NVARCHAR(MAX);
+DECLARE @EmailFormat NVARCHAR(32);
+DECLARE @NumberOfDaysToGoBack SMALLINT;
+DECLARE @EmailProfile NVARCHAR(256);
+DECLARE @DurationTime INT;
+DECLARE @PreviousDate DATETIME;
+
+------------------------------------------------------------------------------------------------------------
+-- Initialize
+------------------------------------------------------------------------------------------------------------
+SET @NumberOfDaysToGoBack = 7; -- Set accordingly.
+SET @EmailList = 'FredTaylor@gmail.com';-- Set accordingly.
+SET @EmailFormat = 'HTML';-- Set accordingly.
+SET @EmailProfile = 'Apps_Dev';-- Set accordingly.
+SET @DurationTime = 1000;-- Set accordingly. NOTE, 1000 translates 10:00 minutes
+SET @PreviousDate = GETDATE() - @NumberOfDaysToGoBack;
+SET @GroundZeroDate = (YEAR(@PreviousDate) * 100 + MONTH(@PreviousDate)) * 100 + DAY(@PreviousDate);
+
+------------------------------------------------------------------------------------------------------------
+-- Find long running job based on the above criteria and save in XML style
+------------------------------------------------------------------------------------------------------------
+SET @XML = CAST((
+            SELECT DISTINCT REPLACE(CASE 
+                        WHEN LEN(CAST(h.run_duration AS NVARCHAR(256))) > 5
+                            THEN ''
+                        WHEN LEN(CAST(h.run_duration AS NVARCHAR(256))) = 5
+                            THEN '0'
+                        ELSE '00'
+                        END + REVERSE(SUBSTRING(REVERSE(CAST(h.run_duration AS NVARCHAR(256))), 5, LEN(CAST(h.run_duration AS NVARCHAR(256))))) + ':' + REVERSE(SUBSTRING(REVERSE(CAST(h.run_duration AS NVARCHAR(256))), 3, 2)) + ':' + REVERSE(SUBSTRING(REVERSE(CAST(h.run_duration AS NVARCHAR(256))), 1, 2)), '::', ':00:') AS 'td'
+                ,''
+                ,j.[name] AS 'td'
+                ,''
+                ,h.run_date AS 'td'
+                ,''
+                ,REPLACE(CASE 
+                        WHEN LEN(CAST(h.run_time AS NVARCHAR(256))) > 5
+                            THEN ''
+                        WHEN LEN(CAST(h.run_time AS NVARCHAR(256))) = 5
+                            THEN '0'
+                        ELSE '00'
+                        END + REVERSE(SUBSTRING(REVERSE(CAST(h.run_time AS NVARCHAR(256))), 5, LEN(CAST(h.run_time AS NVARCHAR(256))))) + ':' + REVERSE(SUBSTRING(REVERSE(CAST(h.run_time AS NVARCHAR(256))), 3, 2)) + ':' + REVERSE(SUBSTRING(REVERSE(CAST(h.run_time AS NVARCHAR(256))), 1, 2)), '::', ':00:') AS 'td'
+                ,''
+                ,h.[message] AS 'td'
+            FROM msdb.dbo.sysjobhistory h
+            INNER JOIN msdb.dbo.sysjobs j ON h.job_id = j.job_id
+            INNER JOIN msdb.dbo.sysjobsteps s ON j.job_id = s.job_id
+            WHERE h.run_date >= @GroundZeroDate
+                AND h.run_duration >= @DurationTime
+                AND h.step_id = 0
+            ORDER BY 1 DESC
+            FOR XML PATH('tr')
+                ,ELEMENTS
+            ) AS NVARCHAR(MAX));
+            
+------------------------------------------------------------------------------------------------------------
+-- Generate email body XML
+------------------------------------------------------------------------------------------------------------            
+SET @Body = '<html><body><H3>Long Running SQL Agent Jobs</H3>
+<table border = 1> 
+<tr>
+<th> Duration </th> <th> Job Name </th> <th> Run Date </th> <th> Run Time </th>  <th> Message </th>     </tr>'
+SET @Body = @Body + @XML + '</table></body></html>';
+
+------------------------------------------------------------------------------------------------------------
+-- Send the email
+------------------------------------------------------------------------------------------------------------            
+SET @Subject = @@ServerName + ' ' + 'SQL Agent Jobs That Took A Long Time To Run';
+
+EXEC msdb.dbo.sp_send_dbmail @profile_name = @EmailProfile
+    ,@recipients = @EmailList
+    ,@subject = @Subject
+    ,@Body = @Body
+    ,@Body_format = @EmailFormat;

@@ -1,0 +1,8 @@
+--number of physical cpu installed 
+
+ The Sql Server always see Logical cpu it does not distinguish between Hyperthreaded logical cpu and physical processor using the below query we can find out actual number of physical cpu installed on the server
+
+The first column represent logical processor and second column represent actual  physical processor  installed
+
+
+SELECT cpu_count AS Logical_CPU_Count , cpu_count / hyperthread_ratio AS Physical_CPU_Count FROM sys.dm_os_sys_info ;

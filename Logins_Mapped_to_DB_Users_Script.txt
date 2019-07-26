@@ -1,0 +1,13 @@
+create table #loginmappings(  
+ LoginName  nvarchar(128) NULL,  
+ DBName     nvarchar(128) NULL,  
+ UserName   nvarchar(128) NULL,  
+ AliasName  nvarchar(128) NULL 
+)  
+ 
+insert into #loginmappings
+EXEC master..sp_msloginmappings
+ 
+select * from #loginmappings where dbname like  'cds'
+ 
+drop table #loginmappings

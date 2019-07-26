@@ -1,0 +1,86 @@
+Powershell Script To Check the SQL Jobs Status remotely
+
+ Steps to run this script..
+1) Save the script in folder "D:\CheckSQLJobs.ps1"
+2) Start windows powershell with the run as administrator option 
+3) Run the below command on windows powershell prompt like below. 
+     PS C:\> . D:\CheckSQLJobs.ps1
+  You will get the results like below.
+
+Zoom in  |  Open in new window
+
+3) Now you can check SQL Job's STATUS remotely by below command.
+
+   PS C:\> checkSQLJobs SQLInstanceName Options
+
+Options are :
+    JA ## List Of All Jobs
+    JR ## List Of Currently Running Jobs
+    JS ## List Of Jobs with last status "Succeeded" 
+    JF ## List Of Jobs with last status "Failed"
+    JC ## List Of Jobs with last status "Cancelled"
+    JD ## List Of "Disabled" Jobs
+    JNS ## List Of Jobs which are not scheduled"
+    jnxtrun ## Jobs Next Run date and time
+Example : 
+Zoom in  |  Open in new window
+So enjoy the Power of PowerShell.. Happy Learning :-) 
+
+
+
+#######################
+cd \
+Set-ExecutionPolicy RemoteSigned
+Add-PSSnapin SqlServerCmdletSnapin100
+Add-PSSnapin SqlServerProviderSnapin100
+[System.Reflection.Assembly]::LoadWithPartialName("Microsoft.SqlServer.Smo")
+#######################
+
+function checkSQLJobs
+{
+	$srv=NEW-OBJECT ('MICROSOFT.SQLSERVER.MANAGEMENT.SMO.SERVER') $args[0]
+
+	###########################################################################################################################
+	if($args[1] -EQ "JA") ## List Of All Jobs
+	{
+	$srv.jobserver.jobs| where-object {$_.name -like "*"} | sort-object -descending {$_.lastrundate} | select name,lastrundate,lastrunoutcome,currentrunstatus,currentrunstep,isenabled,nextrundate | format-table -AUTOSIZE | Out-String -Width 4096
+	}
+	###########################################################################################################################
+	elseif($args[1] -EQ "JR") ## List Of Running Jobs
+	{
+	$srv.jobserver.jobs| where-object {$_.name -like "*" -and $_.currentrunstatus -eq 1 } | sort-object -descending {$_.lastrundate} | select name,currentrunstatus,currentrunstep,lastrundate,lastrunoutcome,isenabled,nextrundate | format-table -AUTOSIZE | Out-String -Width 4096
+	}
+	###########################################################################################################################
+	elseif($args[1] -EQ "JS") ## List Of Jobs with status "Succeeded" 
+	{
+	$srv.jobserver.jobs| where-object {$_.name -like "*" -and $_.lastrunoutcome -eq "succeeded" -and $_.currentrunstatus -ne 1} | sort-object -descending {$_.lastrundate} | select name,lastrundate,lastrunoutcome,currentrunstatus,currentrunstep,isenabled,nextrundate | format-table -AUTOSIZE | Out-String -Width 4096
+	}
+	###########################################################################################################################
+	elseif($args[1] -EQ "JF") ## List Of Jobs with status "Failed"
+	{
+	$srv.jobserver.jobs| where-object {$_.name -like "*" -and $_.lastrunoutcome -eq "failed" -and $_.currentrunstatus -ne 1} | sort-object -descending {$_.lastrundate} | select name,lastrundate,lastrunoutcome,currentrunstatus,currentrunstep,isenabled,nextrundate | format-table -AUTOSIZE | Out-String -Width 4096
+	}
+	###########################################################################################################################
+	elseif($args[1] -EQ "JC") ## List Of Jobs with status "Cancelled"
+	{
+	$srv.jobserver.jobs| where-object {$_.name -like "**" -and $_.lastrunoutcome -eq "cancelled" -and $_.currentrunstatus -ne 1} | sort-object -descending {$_.lastrundate} | select name,lastrundate,lastrunoutcome,currentrunstatus,currentrunstep,isenabled,nextrundate | format-table -AUTOSIZE | Out-String -Width 4096
+	}
+	###########################################################################################################################
+	elseif($args[1] -EQ "JD") ## List Of Jobs with status "Disabled"
+	{
+	$srv.jobserver.jobs| where-object {$_.name -like "*" -and $_.isenabled -eq 0 } | sort-object -descending {$_.lastrundate} | select name,lastrundate,lastrunoutcome,currentrunstatus,currentrunstep,isenabled,nextrundate | format-table -AUTOSIZE | Out-String -Width 4096
+	}
+	###########################################################################################################################
+	elseif($args[1] -EQ "JNS") ## List Of Jobs which are not scheduled"
+	{
+	$srv.jobserver.jobs| where-object {$_.name -like "*" -and $_.isenabled -eq 1 -and $_.nextrundate -eq "1/1/0001 12:00:00 AM" } | sort-object -descending {$_.lastrundate} | select name,lastrundate,lastrunoutcome,currentrunstatus,currentrunstep,isenabled,nextrundate | format-table -AUTOSIZE | Out-String -Width 4096
+	}
+	###########################################################################################################################
+	elseif($args[1] -EQ "jnxtrun") ## Jobs Next Run date and time
+	{
+	$srv.jobserver.jobs| where-object {$_.name -like "*" -and $_.isenabled -eq 1 -and $_.nextrundate -ne "1/1/0001 12:00:00 AM" } | sort-object  {$_.nextrundate} | select name,currentrunstatus,nextrundate | format-table -AUTOSIZE | Out-String -Width 4096
+	}
+	###########################################################################################################################
+}
+
+

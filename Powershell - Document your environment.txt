@@ -1,0 +1,184 @@
+Powershell - Document your environment
+
+http://www.sqlservercentral.com/scripts/powershell/97305/
+
+ This script is an improvement from my original script entitled "Powershell - Query SQL Servers Operating system details" (http://www.sqlservercentral.com/scripts/powershell/96809/). I have since changed the script to query AD instead of a central management server. I have also included a few noted on setting up your Powershell environment to work with additional modules required for the script to run.
+
+This script searches through AD, based on a filter you have specified (The filter is based on the naming standard you use for your server names).
+
+Documentation: Computer System information, applications installed and services running on service accounts. If applicable, version of SQL Server installed as well as databases being hosted by the particular SQL Server. Server memory as well as logical disk allocation and sizes.
+
+Please let me know your thoughts on this script. I have recently started playing around with Powershell and think it is an amazing tool for all administrators in an environment and extremely beneficial to organizaation.
+
+
+
+
+
+
+# Required Powershell components
+# invoke-sql http://www.microsoft.com/web/downloads/platform.aspx
+
+#    Install SQL Server 2008 R2 Management Objects using Web PI (I’m not sure about versions prior to 2008 R2… if you have more info, please let us know in the comments)
+#    Install ‘Windows PowerShell Extensions for SQL Server’ from the Microsoft® SQL Server® 2008 R2 Feature Pack page (it’s about halfway down the page).
+#    Run these two commands before calling invoke-sqlcmd in your script:
+
+#    Add-PSSnapin SqlServerCmdletSnapin100
+#    Add-PSSnapin SqlServerProviderSnapin100
+# Ref: http://jasonq.com/index.php/2012/03/3-things-to-do-if-invoke-sqlcmd-is-not-recognized-in-windows-powershell/
+
+
+# windows server 2003 servers need to have Management and monitoring tools feature enabled, with the WMI Windows Installer Provider option chosen
+
+function GetServers
+{
+
+    # modify the filter condition to match the naming standard or group of servers you are looking to use.
+    $Server_out = Get-ADComputer -Filter {(Name -like "vyp*")} | Select Name
+
+    return $Server_out
+}
+
+function GetSQLServerInfo($SqlServer,$server_name){
+      
+    Invoke-Sqlcmd –ServerInstance $SqlServer –Database master –Query "
+    select @@servername as ServerName 
+    , @@version as SQLServerEdition" | export-csv -path .\ProductionServers\$server_name\ProductionServer_SQLServerInformation.csv -noType
+} 
+
+function GetSQLServerDatabaseInfo($SqlServer,$server_name){
+      
+    Invoke-Sqlcmd –ServerInstance $SqlServer –Database master –Query "
+    select 
+        @@servername			as ServerName
+    ,	a.name					as DatabaseName
+	,	b.name					as LogicalFileName
+    ,	a.create_date
+    ,	a.collation_name
+    ,	a.user_access_desc
+    ,	a.recovery_model_desc
+    ,	a.state_desc
+    ,	b.size					as FileSize
+	,	b.filename
+    from sys.databases a
+    inner join sysaltfiles b on a.database_id = b.dbid
+" | export-csv -path .\ProductionServers\$server_name\ProductionServer_SQLServerDatabaseInformation.csv -noType
+} 
+
+#clean up instance name and build a named instance that will be accepted in SQL fnuctions
+function BuildSQLNamedInstance($server_name, $instance_name){
+
+            $instance_name = $instance_name.replace("MSSQL$","\")
+            $server_name_instance = "$server_name$instance_name"
+
+            return $server_name_instance
+}
+
+# Fetch the list of servers
+$Server_list = GetServers
+
+ForEach ($server in $Server_list) {
+
+    $server_name = $server.name
+            
+   # Ping the machine to see if it is online and responding
+   $results = Get-WMIObject -query "select StatusCode from Win32_PingStatus where Address = '$server_name'"
+   $responds = $false
+
+
+
+    ForEach ($result in $results) {
+        # If the machine responds break out of the result loop and indicate success
+        if ($result.statuscode -eq 0) {
+            $responds = $true
+            break
+        }
+    }
+
+    #work through servers that are responding to ping request
+    If ($responds) {
+
+        # Check to see if a directory exists for this machine, if not create one
+        if (!(Test-Path -path .\ProductionServers\$server_name\)) {
+            New-Item .\ProductionServers\$server_name\ -type directory
+        }
+       
+        # Get ComputerSystem info and write it to a CSV file
+        gwmi -class Win32_ComputerSystem -computername $server_name | select Name,
+        Model, Manufacturer, Description, DNSHostName,
+        Domain, DomainRole, PartOfDomain, NumberOfProcessors,
+        SystemType, @{Name=”TotalPhysicalMemory (GB)”; Expression={[math]::round($($_.TotalPhysicalMemory/1gb), 2)}} | export-csv -path .\ProductionServers\$server_name\ProductionServer_ComputerSystem.csv -noType
+
+
+        # Get OperatingSystem info and write it to a CSV file
+        gwmi -Class Win32_OperatingSystem -computername $server_name | select PSComputerName, Name,
+        Version, @{Name=”FreePhysicalMemory (GB)”; Expression={[math]::round($($_.FreePhysicalMemory/1gb), 2)}}, OSLanguage, OSProductSuite,
+        OSType, ServicePackMajorVersion, ServicePackMinorVersion |
+        export-csv -path .\ProductionServers\$server_name\ProductionServer_OperatingSystem.csv -noType
+
+
+        # Get SQL Server Version info and write it to a CSV file
+        # Default Instances
+        $objWMIService = Get-WmiObject -computer $server_name -Query "select Name from win32_Service where name like 'MSSQLSERVER'" | select name
+        if ($objWMIService)
+        {   
+           GetSQLServerInfo $server_name $server_name
+        }
+        
+        # Named Instances
+        $objWMIService = Get-WmiObject -computer $server_name -Query "select Name from win32_Service where name like 'MSSQL$%'" | select name
+        if ($objWMIService)
+        {  
+            $instance_name = $objWMIService.name
+            
+            $server_name_instance = BuildSQLNamedInstance $server_name $instance_name
+
+            GetSQLServerInfo $server_name_instance $server_name
+        }
+
+
+        # Get SQL Server Database Information per server and write it to a CSV file
+        
+        # Default Instances
+        $objWMIService = Get-WmiObject -computer $server_name -Query "select Name from win32_Service where name like 'MSSQLSERVER'" | select name
+        if ($objWMIService)
+        {   
+           GetSQLServerDatabaseInfo $server_name $server_name
+        }
+        
+        # Named Instances
+        $objWMIService = Get-WmiObject -computer $server_name -Query "select Name from win32_Service where name like 'MSSQL$%'" | select name
+        if ($objWMIService)
+        {  
+            $instance_name = $objWMIService.name
+            
+            $server_name_instance = BuildSQLNamedInstance $server_name $instance_name
+
+            GetSQLServerDatabaseInfo $server_name_instance $server_name
+        }
+        
+        # Get PhysicalMemory info and write it to a CSV file
+        gwmi -class Win32_PhysicalMemory -computername $server_name | select PSComputerName, Name,
+        @{Name=”Capacity (GB)”; Expression={[math]::round($($_.Capacity/1gb), 2)}}, DeviceLocator, Tag |
+        export-csv -path .\ProductionServers\$server_name\ProductionServer_PhysicalMemory.csv -noType
+
+
+        # Get LogicalDisk info and write it to a CSV file
+        gwmi -Class Win32_LogicalDisk -computername $server_name | select PSComputerName, Name, VolumeName, @{Name=”Free Space (GB)”; Expression={[math]::round($($_.FreeSpace/1gb), 2)}},
+        @{Name=”Total Size (GB)”; Expression={[math]::round($($_.Size/1gb), 2)}}, FileSystem, Description, LastErrorCode | export-csv -path .\ProductionServers\$server_name\ProductionServer_LogicalDisk.csv –noType
+
+
+        # List all services running on a service account
+        # service account filter should be modified to wht your service account nameing standard is
+        gwmi -class win32_service -computername $server_name -Filter 'Startname LIKE "jse\\svc.%"' | select PSComputerName, Name, DisplayName, StartName, State | export-csv -path .\ProductionServers\$server_name\ProductionServer_ServiceAccountInfo.csv -noType
+
+        # List all applications running on the serevr
+        gwmi -class Win32_Product -ComputerName $server_name | select PSComputerName, Name, InstallDate | export-csv -path .\ProductionServers\$server_name\ProductionServer_InstalledApplications.csv –noType
+
+
+        } else {
+        # Report non-responding server
+        Write-Output "$server_name is not responding"
+    }
+}
+
+

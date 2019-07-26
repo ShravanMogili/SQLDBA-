@@ -1,0 +1,41 @@
+--sa_help_rev.erse.sa.login
+
+ I recently took over some SQL Servers that I needed to change the sa passwords on to get them to a known state. (I inherited the servers, but unfortunately not the passwords) I wanted to be able to rollback if the change caused issues with any of the current applications using these servers.
+
+We all know apps should not be using the sa login for anything, but since I had little time to change the password I put this together . In order to use this script you need the sp_hexadecimal stored procedure installed in your master database. I hacked up the sp_help_revlogin stored procedure to make this hard coded script for the sa account, that generates the appropriate "ALTER LOGIN" statements that will put the account back to the way it is at the time of executing this tsql.
+
+I used a temp table so that I can also run it against multiple servers at once in SSMS via a registered server group query, or it will work just fine on a single connection. I just stored the results in a pgp encrypted csv file manually for my little project, but the script could easily be edited to store the output in a work database table somewhere using encryption.
+
+I wouldn't leave the output of this script around for just anyone to find. I tested this on a few SQL Server 2008/ 2008R2 dev servers with passwords as long as 64 chars long, and each time I was able to run the output of this script to return the sa password back to the previous state. Since I found this useful, I thought I would share it. I know it could be a bit more detailed and check the state of the CHECK_POLICY before turning it off an on, but 1.) All my servers had it turned on, and 2.) The HASHED argument can't be used in ALTER LOGIN where the CHECK_POLICY = ON.
+
+
+SET NOCOUNT ON
+GO
+CREATE TABLE #sa_backup
+	(
+		 ServerName VARCHAR(45)
+		,Pass_Hash VARCHAR(514)
+	)
+
+DECLARE @PWD_varbinary  VARBINARY(256)
+DECLARE @PWD_string  VARCHAR(514)
+DECLARE @SID_varbinary VARBINARY(85)
+DECLARE @SID_string VARCHAR(514)
+DECLARE @tmpstr  VARCHAR(4096)
+
+SET @PWD_varbinary = CAST(LOGINPROPERTY('sa', 'PasswordHash') AS VARBINARY(256))
+SET @SID_varbinary = 0x01
+EXEC master.dbo.sp_hexadecimal @PWD_varbinary, @PWD_string OUT
+EXEC master.dbo.sp_hexadecimal @SID_varbinary,@SID_string OUT
+
+SET @tmpstr = 'ALTER LOGIN ' + QUOTENAME( 'sa' ) + ' WITH CHECK_POLICY = OFF; ALTER LOGIN ' + QUOTENAME( 'sa' ) + ' WITH PASSWORD = ' + @PWD_string + ' HASHED; ALTER LOGIN ' + QUOTENAME( 'sa' ) + ' WITH CHECK_POLICY = ON;'
+
+INSERT INTO #sa_backup
+SELECT @@SERVERNAME, @tmpstr
+GO
+SET NOCOUNT OFF
+
+SELECT * FROM #sa_backup
+
+DROP TABLE #sa_backup
+

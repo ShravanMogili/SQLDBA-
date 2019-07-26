@@ -1,0 +1,35 @@
+::@echo off
+ 
+:: Description
+:: Automate SQL Server database restore process
+:: Author : Dilip Singh
+ 
+:: Set variables
+SET SERVER=yoursevername\sqlserverinstancename
+SET Db=Hello
+
+SET SRC_SERVER=praveen
+SET SRC_DB=praveen_log
+ 
+::databse backup file path
+SET SRC_DAT=E:\backup\MyDB.bak
+
+::Destination dtabase detials  
+SET DST_DAT=E:\Data\MyDestDB.mdf
+SET DST_LOG=E:\Data\MyDestDB_log.ldf
+ 
+REM === Restore
+pause
+REM === Please wait.. resotre in progress...
+SQLCMD.EXE -S %SERVER% -Q "RESTORE DATABASE [%DB%] FROM  DISK = N'%SRC_DAT%' 
+WITH FILE = 1,  
+MOVE N'%SRC_SERVER%' TO N'%DST_DAT%', 
+MOVE N'%SRC_DB%' TO N'%DST_LOG%',
+NOUNLOAD,  REPLACE,  STATS = 10" || goto Error
+
+REM === additional scripts can be called here i. creating user automatically etc.
+pause  SQLCMD.EXE -S %SERVER% -v DB=%DB% -i yourscriptname.sql || goto Error
+exit /b 0
+:Error
+exit /b 1
+pause

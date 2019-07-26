@@ -1,0 +1,170 @@
+This is a script, similar to some you have seen in the past, that will monitor file growth on all databases for the given server. This script is not a fancy solution that has a tons of bells and whistles but, it is efficient. The script is a concantanation of the create table / populate initial data script, the stored procedure creation and the job creation script. The job creation script is the SQL generated script so, excuse the formatting. If you decide to change the job name, please make sure to update the stored proc as it references the job name to pull the email address for the operator assigned. Additionally, you will need to update the job script to put in the the proper Operator information. 
+
+
+
+/*==========================================================================================
+**
+** FILE  : Combination of Scripts for File Growth Monitoring
+** Author: David K. Benoit
+** Date  : 12/21/2001
+** Version: 1.0
+**
+**==========================================================================================
+**
+** PURPOSE OF FILE : To monitor file growth for all databases on this server using set based 
+** programming rather than cursors. Not a flashy solution but works extremely efficiently.  
+**	
+**=========================================================================================*/
+
+/*	Create the table and populate it with base data.
+*/
+
+use master
+
+if exists
+	(select name from sysobjects where name = 'DBAFileInfo')
+	drop table DBAFileInfo
+
+create table DBAFileInfo
+	(
+	HistId int identity(1,1) constraint PKHistID primary key clustered,
+	DBName varchar(32),
+	FileID int,
+	CurrentSize int,
+	OldSize int
+	)
+
+
+/*	Populate the DBAFileInfo table with current information.
+*/
+insert into DBAFileInfo (DBName, FileID, CurrentSize)
+	exec sp_MSforeachdb @command1 = 
+		'select db_name(dbid), sf.fileid, sf.size 
+			from sysdatabases sd, ?..sysfiles sf 
+		where db_name(dbid) = ''?'''
+go
+/*	Create the stored procedure vsp_MonFileGrowth.
+*/
+if exists
+	(select name from sysobjects where name = 'vsp_MonFileGrowth')
+	drop procedure vsp_MonFileGrowth
+go
+
+create procedure vsp_MonFileGrowth as
+
+declare 
+	@OperEmail varchar(32)
+set @OperEmail = 
+	(select email_address 
+		from msdb..sysjobs j join msdb..sysoperators o on j.notify_email_operator_id = o.id
+	where j.name = '#dba - monitor file growth'
+	)
+
+/*	Clear any old database information from the DBAFileInfo table.
+*/
+delete from DBAFileInfo where DBName not in 
+	(select name from sysdatabases)
+
+/*	Insert any new databases information into DBAFileInfo created since last run.
+*/
+insert into DBAFileInfo (DBName, FileID, CurrentSize)
+	exec sp_MSforeachdb @command1 = 
+		'select db_name(dbid), sf.fileid, sf.size 
+			from sysdatabases sd, ?..sysfiles sf 
+		where 
+			db_name(dbid) = ''?''
+			and
+			''?'' not in 
+				(select DBName from DBAFileInfo)' 
+
+/*	Update the old size from the past current size (thereby making the old size the old size).
+*/
+update DBAFileInfo set OldSize = CurrentSize
+
+/*	Update the current size with fresh data.
+*/
+exec sp_MSforeachdb @command1 = 
+		'update DBAFileInfo 
+			set CurrentSize = s.size
+			from DBAFileInfo h join ?..sysfiles s on h.DBName = ''?'' and h.FileID = s.FileID'
+
+/*	Send mail message with attachment to the Operator with Databases having changed file sizes.
+*/
+if exists
+	(select DBName, CurrentSize, OldSize from DBAFileInfo where CurrentSize > OldSize)
+begin
+	exec xp_sendmail
+		@recipients = @OperEmail,
+		@subject = 'The following Databases had file size changes!',
+		@query = 
+			'select 
+				DBName, 
+				CurrentSize*8 as CurrentSizeKB, 
+				OldSize*8 as OldSizeKB 
+				from DBAFileInfo 
+			where CurrentSize > OldSize',
+		@attach_results = 'TRUE', @width = 500
+end
+go
+/*	Create the job to run the stored proc daily. This is a SQL generated script so formatting
+	is not what I would normally do. 
+*/
+
+/*	Create the job to run the stored procdure.
+*/
+
+BEGIN TRANSACTION            
+  DECLARE @JobID BINARY(16)  
+  DECLARE @ReturnCode INT    
+  SELECT @ReturnCode = 0     
+IF (SELECT COUNT(*) FROM msdb.dbo.syscategories WHERE name = N'[Uncategorized (Local)]') < 1 
+  EXECUTE msdb.dbo.sp_add_category @name = N'[Uncategorized (Local)]'
+
+  -- Delete the job with the same name (if it exists)
+  SELECT @JobID = job_id     
+  FROM   msdb.dbo.sysjobs    
+  WHERE (name = N'#dba - monitor file growth')       
+  IF (@JobID IS NOT NULL)    
+  BEGIN  
+  -- Check if the job is a multi-server job  
+  IF (EXISTS (SELECT  * 
+              FROM    msdb.dbo.sysjobservers 
+              WHERE   (job_id = @JobID) AND (server_id <> 0))) 
+  BEGIN 
+    -- There is, so abort the script 
+    RAISERROR (N'Unable to import job ''#dba - monitor file growth'' since there is already a multi-server job with this name.', 16, 1) 
+    GOTO QuitWithRollback  
+  END 
+  ELSE 
+    -- Delete the [local] job 
+    EXECUTE msdb.dbo.sp_delete_job @job_name = N'#dba - monitor file growth' 
+    SELECT @JobID = NULL
+  END 
+
+BEGIN 
+
+  -- Add the job
+  EXECUTE @ReturnCode = msdb.dbo.sp_add_job @job_id = @JobID OUTPUT , @job_name = N'#dba - monitor file growth', @owner_login_name = N'sa', @description = N'no description available.', @category_name = N'[Uncategorized (Local)]', @enabled = 1, @notify_level_email = 2, @notify_level_page = 0, @notify_level_netsend = 0, @notify_level_eventlog = 2, @delete_level= 0, @notify_email_operator_name = N'Name, Your'
+  IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback 
+
+  -- Add the job steps
+  EXECUTE @ReturnCode = msdb.dbo.sp_add_jobstep @job_id = @JobID, @step_id = 1, @step_name = N'step 1', @command = N'exec vsp_MonFileGrowth', @database_name = N'master', @server = N'', @database_user_name = N'', @subsystem = N'TSQL', @cmdexec_success_code = 0, @flags = 0, @retry_attempts = 1, @retry_interval = 1, @output_file_name = N'', @on_success_step_id = 0, @on_success_action = 1, @on_fail_step_id = 0, @on_fail_action = 2
+  IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback 
+  EXECUTE @ReturnCode = msdb.dbo.sp_update_job @job_id = @JobID, @start_step_id = 1 
+
+  IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback 
+
+  -- Add the job schedules
+  EXECUTE @ReturnCode = msdb.dbo.sp_add_jobschedule @job_id = @JobID, @name = N'monitor file growth', @enabled = 1, @freq_type = 4, @active_start_date = 19991223, @active_start_time = 230000, @freq_interval = 1, @freq_subday_type = 1, @freq_subday_interval = 0, @freq_relative_interval = 0, @freq_recurrence_factor = 0, @active_end_date = 99991231, @active_end_time = 235959
+  IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback 
+
+  -- Add the Target Servers
+  EXECUTE @ReturnCode = msdb.dbo.sp_add_jobserver @job_id = @JobID, @server_name = N'(local)' 
+  IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback 
+
+END
+COMMIT TRANSACTION          
+GOTO   EndSave              
+QuitWithRollback:
+  IF (@@TRANCOUNT > 0) ROLLBACK TRANSACTION 
+EndSave: 

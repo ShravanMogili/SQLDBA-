@@ -1,0 +1,23 @@
+Recreate Missing Log Files
+
+ To attach the database by creating new log files, when the log file is mising.
+
+
+--Method 1: To recreate all the log files
+
+EXECUTE sp_attach_single_file_db @dbname = 'SAMPLEDB',
+@physname = N'D:\MSSQL\DATA\SAMPLEDB.mdf' 
+GO
+
+--Method 2: If one or more log files are missing, they are recreated again.
+
+CREATE DATABASE SAMPLEDB ON
+(FILENAME = N'D:\MSSQL\DATA\SAMPLEDB.mdf')
+FOR ATTACH_REBUILD_LOG
+GO 
+
+--Method 3: If only one file is missing, they are recreated again. 
+CREATE DATABASE SAMPLEDB ON
+( FILENAME = N'D:\MSSQL\DATA\SAMPLEDB.mdf')
+FOR ATTACH
+GO

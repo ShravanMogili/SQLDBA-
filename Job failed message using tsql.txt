@@ -1,0 +1,33 @@
+http://social.msdn.microsoft.com/Forums/en-US/transactsql/thread/ab72f778-207e-4f5e-8e78-da5b30bce6fd/
+
+use msdb
+go
+SELECT 
+h.server,j.name,
+CAST(SUBSTRING(CAST(run_date AS VARCHAR(10)),1,4) + '-'+ SUBSTRING(SUBSTRING(CAST(run_date AS VARCHAR(10)),5,6),1,2) +'-'+Substring(CAST(run_date AS VARCHAR(10)),7,8) AS DATETIME) As RunDate,
+CASE          
+                 WHEN RIGHT('000000' + RTRIM(run_time),6) > '125959' THEN
+                     LEFT( RIGHT('000000' + RTRIM(run_time - 120000), 6), 2 ) + ':' +
+                      SUBSTRING( RIGHT('000000' + RTRIM(run_time - 120000), 6),3,2) + ':' +
+                      RIGHT( RIGHT('000000' + RTRIM(run_time - 120000), 6),2) + ' PM'
+                 WHEN RIGHT('000000' + RTRIM(run_time),6) >= '120000' AND
+                      RIGHT('000000' + RTRIM(run_time),6) <= '125959' THEN
+                      LEFT( RIGHT('000000' + RTRIM(run_time),6), 2 ) +  ':' + 
+                      SUBSTRING( RIGHT('000000' + RTRIM(run_time), 6),3,2) + ':' +
+                      RIGHT( RIGHT('000000' + RTRIM(run_time), 6),2) + ' PM'
+                 WHEN RIGHT('000000' + RTRIM(run_time),6) < '010000' THEN 
+                     '12:' +
+                      SUBSTRING( RIGHT('000000' + RTRIM(run_time), 6),3,2) + ':' +
+                      RIGHT( RIGHT('000000' + RTRIM(run_time), 6),2) + ' AM'
+                 ELSE
+                      LEFT( RIGHT('000000' + RTRIM(run_time),6), 2 ) +  ':' + 
+                      SUBSTRING( RIGHT('000000' + RTRIM(run_time), 6),3,2) + ':' +
+                      RIGHT( RIGHT('000000' + RTRIM(run_time), 6),2) + ' AM'
+            END As RunTime,
+h.step_name,h.sql_severity,h.message
+FROM msdb.dbo.Sysjobs j
+INNER JOIN msdb.dbo.sysjobhistory h ON j.job_id = h.job_id
+WHERE h.message like '%step%failed%'
+AND message  NOT LIKE  '%Job outcome%'
+AND CAST(SUBSTRING(CAST(run_date AS VARCHAR(10)),1,4) + '-'+ SUBSTRING(SUBSTRING(CAST(run_date AS VARCHAR(10)),5,6),1,2) +'-'+Substring(CAST(run_date AS VARCHAR(10)),7,8) AS DATETIME) > GETDATE()-30
+ORDER BY CAST(SUBSTRING(CAST(run_date AS VARCHAR(10)),1,4) + '-'+ SUBSTRING(SUBSTRING(CAST(run_date AS VARCHAR(10)),5,6),1,2) +'-'+Substring(CAST(run_date AS VARCHAR(10)),7,8) AS DATETIME) DESC

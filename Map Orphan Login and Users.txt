@@ -1,0 +1,98 @@
+Map Orphan Login and Users
+
+
+Execute the script in the Master Database.
+
+To execute the script, use the below syntax. No need to pass any parameters.
+
+/* execute the SP now */
+exec sp_fixOrphanusers
+
+ 
+
+Note: This works well for SQL 2005/2008 Serves,
+
+
+/********************************** READ ME ***********************************************
+
+Run the procedure in the Master database. No need to pass any parameters. It remaps orphaned 
+users in the current database to EXISTING logins of the same name. This procedure helps when 
+a database is created by restoring a backup to a new database,, or by attaching the datafiles 
+to a new server. 
+*******************************************************************************************/
+
+/*
+--If parameter is Auto_Fix, database user is mapped with same named SQL Server login. 
+ It may also create login, if not present and then map the login to the user.
+ ----------------------------------------------------------------------------------
+ Command to map an orphaned user to a login that is not present but will be created
+ -----------------------------------------------------------------------------------
+ EXEC sp_change_users_login 'Auto_Fix', 'TESTUSER', null,'pwd'
+ GO 
+ 
+--If parameter is Report, it lists the orphaned users and their security identifiers (SID). 
+--If parameter is Update_One, it links the specified database user to an existing SQL Server login.
+*/
+
+SET QUOTED_IDENTIFIER OFF
+GO
+IF OBJECT_ID('dbo.sp_fixOrphanusers') IS NOT NULL
+BEGIN
+DROP PROCEDURE dbo.sp_fixOrphanusers
+IF OBJECT_ID('dbo.sp_fixOrphanusers') IS NOT NULL
+PRINT 'Unable to Drop the PROCEDURE dbo.sp_fixOrphanusers'
+ELSE
+PRINT 'PROCEDURE dbo.sp_fixOrphanusers is Dropped'
+END
+GO
+
+-- Write the procedure in the master--
+--Start of the SP.
+CREATE PROCEDURE dbo.sp_fixOrphanusers
+AS
+set nocount on
+BEGIN
+-- Declare the variables --
+DECLARE @username varchar(25)
+--Declare the cursor--
+DECLARE fixOrphanusers CURSOR 
+FOR
+SELECT UserName = name FROM sysusers
+WHERE issqluser = 1 and (sid is not null and sid <> 0x0)
+and suser_sname(sid) is null
+ORDER BY name
+--Fetch the UserName and SID Value --
+select UserName = name, UserSID = sid from sysusers 
+ where issqluser = 1 
+ and (sid is not null and sid <> 0x0) 
+ and (len(sid) <= 16) 
+ and suser_sname(sid) is null 
+ order by name 
+OPEN fixOrphanusers
+FETCH NEXT FROM fixOrphanusers
+INTO @username
+WHILE @@FETCH_STATUS = 0
+BEGIN
+--IF @username='dbo' -- select IS_MEMBER('db_owner')
+If IS_MEMBER('db_owner') =1
+BEGIN 
+EXEC sp_changedbowner 'sa' /* this maps dbo back to the SA login */
+END
+ELSE
+BEGIN
+EXEC sp_change_users_login 'update_one', @username, @username
+END
+FETCH NEXT FROM fixOrphanusers
+INTO @username
+END
+CLOSE fixOrphanusers
+DEALLOCATE fixOrphanusers
+END
+go
+IF OBJECT_ID('dbo.sp_fixOrphanusers') IS NOT NULL
+PRINT 'PROCEDURE dbo.sp_fixOrphanusers has been created'
+ELSE
+PRINT 'Failed to create the PROCEDURE dbo.sp_fixOrphanusers'
+go --- End Of the SP.
+
+/* execute the SP now */

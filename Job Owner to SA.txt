@@ -1,0 +1,39 @@
+go
+DECLARE @db_job_count INT
+SELECT @db_job_count = count(distinct(suser_sname(owner_sid))) from msdb..sysjobs where suser_sname(owner_sid) <> 'sa'
+IF @db_job_count > '0'
+    BEGIN
+        DECLARE @change_job_id VARCHAR(50)
+        DECLARE @change_job_name VARCHAR(100)        
+        DECLARE job_id_cursor CURSOR FOR 
+        SELECT job_id, name    FROM msdb..sysjobs WHERE suser_sname(owner_sid) <> 'sa'
+        OPEN job_id_cursor
+        FETCH NEXT FROM job_id_cursor
+        INTO @change_job_id, @change_job_name
+        WHILE @@FETCH_STATUS = 0
+            BEGIN
+                DECLARE @sql_statement NVARCHAR(255)
+                EXEC msdb..sp_update_job @job_id = @change_job_id, @owner_login_name ='sa' 
+                PRINT 'Job ' + @change_job_name + ' has been updated to sa ownership'
+        FETCH NEXT FROM job_id_cursor INTO @change_job_id, @change_job_name
+END
+CLOSE job_id_cursor
+DEALLOCATE job_id_cursor
+END
+
+
+or
+
+
+
+DECLARE @Sql VARCHAR(MAX) 
+
+SET @Sql = (
+SELECT ‘EXEC msdb..sp_update_job @job_id = ”’ + CAST(job_id AS VARCHAR(50)) + ”’, @owner_login_name =”sa”’
+FROM msdb..sysjobs WHERE suser_sname(owner_sid) ‘sa’
+FOR XML PATH(”)
+)
+PRINT @Sql
+EXEC (@Sql)
+
+

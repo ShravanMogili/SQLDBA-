@@ -1,0 +1,57 @@
+
+Creating Indexed View in Microsoft SQL Server 2005 & 2008
+Indexed View is the one of the best solutions to Business users
+
+
+use Northwind
+go
+
+sp_help Orders
+sp_help Customers
+
+select * from Customers
+select * from Orders
+
+
+
+-- Select data from two tables for test
+select OrderID, OrderDate , Orders.CustomerID,CompanyName
+from Orders Inner Join Customers
+on Orders.CustomerID = Customers.CustomerID
+go
+
+-- Step 1
+
+-- create view from joined two tables
+create view [dbo].[vw_OrderbyCustomer] with schemabinding as
+(
+select [OrderID], [OrderDate] , [Orders].CustomerID, [CompanyName]
+from [dbo].[Orders]
+Inner Join [dbo].Customers on [Orders].CustomerID = [Customers].CustomerID
+)
+go
+
+select * from [vw_OrderbyCustomer]
+
+
+-- Step 2
+-- create a Clustered Index on View
+create unique clustered index Idx_CI_View_OrderId_CustomerId on [vw_OrderbyCustomer](OrderID,CustomerID)
+
+-- check the Index from Tables
+sp_helpIndex vw_OrderbyCustomer
+
+-- create a NonClustered Index on View
+create unique index Idx_NCI_View_OrderId on [vw_OrderbyCustomer](OrderID)
+create index Idx_NCI_View_CustomerId on [vw_OrderbyCustomer](CustomerID)
+create index Idx_NCI_View_OrderDate on [vw_OrderbyCustomer](OrderDate)
+create index Idx_NCI_View_CompanyName on [vw_OrderbyCustomer](CompanyName)
+
+-- Step 3
+sp_helpIndex vw_OrderbyCustomer
+
+Idx_CI_View_OrderId_CustomerId clustered, unique located on PRIMARY OrderID, CustomerID
+Idx_NCI_View_CompanyName nonclustered located on PRIMARY CompanyName
+Idx_NCI_View_CustomerId nonclustered located on PRIMARY CustomerID
+Idx_NCI_View_OrderDate nonclustered located on PRIMARY OrderDate
+Idx_NCI_View_OrderId nonclustered, unique located on PRIMARY OrderID

@@ -1,0 +1,12 @@
+Powershell script to read Windows 2012 R2 Failover cluster log for Sql
+
+ I was having a hard time to reading the Windows 2012 R2 Failover cluster log from my live server. 
+
+That is why I just wrote a simple PowerShell script to get the job done for me.  By using id = 1641 I can get the information when my failover occurred.
+
+Open the PowerShell console and type the scripts, put your own server name in the place of “ServerName”. 
+
+
+
+
+Get-winEvent -ComputerName ServerName -filterHashTable @{logname = 'Microsoft-Windows-FailoverClustering/Operational'; id=1641} 

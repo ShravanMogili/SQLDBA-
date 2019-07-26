@@ -1,0 +1,46 @@
+Get last backup details of all databases in a server
+This stored procedure give you the information about latest backups happened on all databases in a server.
+This SP works for SQL server 2005 and up.
+
+http://www.sanssql.com/search?updated-min=2011-01-01T00:00:00%2B05:30&updated-max=2012-01-01T00:00:00%2B05:30&max-results=37
+
+Create Proc sp_BackupDetails
+AS
+DECLARE @BackupDetails table
+([Server Name] nvarchar(500),
+[Database Name] nvarchar(500),
+[Last Full Backup] nvarchar(500),
+[Last Differential Backup] nvarchar(500),
+[Last Log Backup] nvarchar(500),
+[Last File or filegroup Backup] nvarchar(500),
+[Last Differential file Backup] nvarchar(500),
+[Last Partial Backup] nvarchar(500),
+[Last Differential Partial Backup] nvarchar(500)
+)
+
+DECLARE @DBName nvarchar(500)
+Declare DBName Cursor for
+Select name from sys.databases
+Open DBName
+Fetch Next from DBName into @DBName
+While @@fetch_status = 0
+BEGIN
+Insert into @BackupDetails
+select @@ServerName as [Server Name]
+       ,SDB.name AS [Database Name]
+       ,(select COALESCE(Convert(nvarchar(20), MAX(backup_finish_date), 100),'NA') from msdb..backupset where database_name=@DBName and type='D') AS [Last Full Backup]
+       ,(Select COALESCE(Convert(nvarchar(20), MAX(backup_finish_date), 100),'NA') from msdb..backupset where database_name=@DBName and type='I') AS [Last Differential Backup]
+       ,(Select COALESCE(Convert(nvarchar(20), MAX(backup_finish_date), 100),'NA') from msdb..backupset where database_name=@DBName and type='L') AS [Last Log Backup]
+       ,(Select COALESCE(Convert(nvarchar(20), MAX(backup_finish_date), 100),'NA') from msdb..backupset where database_name=@DBName and type='F') AS [Last File or filegroup Backup]
+       ,(Select COALESCE(Convert(nvarchar(20), MAX(backup_finish_date), 100),'NA') from msdb..backupset where database_name=@DBName and type='G') AS [Last Differential file Backup]
+       ,(Select COALESCE(Convert(nvarchar(20), MAX(backup_finish_date), 100),'NA') from msdb..backupset where database_name=@DBName and type='P') AS [Last Partial Backup]
+       ,(Select COALESCE(Convert(nvarchar(20), MAX(backup_finish_date), 100),'NA') from msdb..backupset where database_name=@DBName and type='Q') AS [Last Differential Partial Backup]
+from sys.databases SDB
+where SDB.name =@DBName
+Fetch Next from DBName into @DBName
+END
+Close DBName
+DEALLOCATE DBName
+
+Select * from @BackupDetails
+GO

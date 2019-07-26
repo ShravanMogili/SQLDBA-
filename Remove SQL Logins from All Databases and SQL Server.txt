@@ -1,0 +1,169 @@
+Remove SQL Logins from All Databases and SQL Server
+
+By Rudy Panigas, 2008/08/08
+
+Have you ever had to delete a user from SQL server but are warned that the ID may still exist in a database? Or have you wanted to ensure that the account has been completed removed? Recently, a request came to me to remove many ids from several servers (SQL 2000 and SQL 2005) which via the EM/SSMS with would have taken some time. So I decided to make this job a little easier and more complete by writing a stored procedure that would help in this task.
+
+The stored procedure will hunt for the user id specified in every database and then generate the T-SQL code used to actually delete the account. Below is an example. Here I created a test id called "TestUser1"
+
+To start , execute the code which will produce a stored procedure called: sp_dba_RemoveUser. Next supply the user account you want to delete and execute.
+
+[sp_dba_RemoveUser] 'testuser1'
+
+Finally the output is generated and you would copy and paste the results to the query window and execute.
+
+Here is an example of the output generated.
+
+
+-- *** Remove User/Login Tool ***
+-- Verion 1.2
+--
+-- This code will generate the t-sql code needed to remove a specific user from databases and
+-- from SQL Server logins if needed.
+
+-- ***********************************************************************************
+-- *** Execute the following code to remove user from ALL DATABASES, if needed ***
+
+
+USE master
+GO
+EXEC sp_dropuser [TestUser1]
+GO
+
+USE model
+GO
+EXEC sp_dropuser [TestUser1]
+GO
+
+USE ReportServer
+GO
+EXEC sp_dropuser [TestUser1]
+GO
+
+USE ReportServerTempDB
+GO
+EXEC sp_dropuser [TestUser1]
+GO
+
+-- ***********************************************************************************
+-- *** Execute the following code to remove user from SQL Server login, if needed ***
+
+IF EXISTS (SELECT loginname FROM master.dbo.syslogins WHERE name = 'testuser1')
+EXEC sp_droplogin testuser1
+
+-- End of code
+
+As you can see the T-SQL code goes to every database and drops the user's account. Once completed it will drop the user from SQL server. Code is created if the user id exists in that databas.
+
+By using this method you can verify that the code generated is for the correct user and you can removed lines for database that you want to keep and/or you have to the option to delete the account for only the databases but keep the server login.
+
+Hope this help you as it has helped me.
+
+Thanks,
+
+Rudy
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+USE [master]
+GO
+
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+-- ========================================================================================================
+-- Author			Verion		Create date		Description		
+-- Rudy Panigas		1.2			July 23, 2008	Corrected code to remove user from all databases and server
+--
+-- To use, execute:   [sp_dba_RemoveUser] 'user_name'
+-- =========================================================================================================
+
+if exists (select * from sysobjects where id = object_id('[dbo].[sp_dba_RemoveUser]') and sysstat & 0xf = 4)
+	drop procedure [dbo].[sp_dba_RemoveUser]
+go
+
+CREATE PROCEDURE [dbo].[sp_dba_RemoveUser] @SpecificName VARCHAR(75)
+AS
+
+PRINT ''
+PRINT '--                         *** Remove User/Login Tool ***'
+PRINT '--									Verion 1.2'
+PRINT '--'
+PRINT '-- This code will generate the t-sql code needed to remove a specific user from databases and '
+PRINT '-- from SQL Server logins if needed.' 
+PRINT ''
+PRINT '-- ***********************************************************************************'
+PRINT '-- *** Execute the following code to remove user from ALL DATABASES, if needed *** '
+PRINT ''
+-- Section 1: Check for the existance of the temp table used
+if (select object_id('tempdb..##dbnames')) is not null
+  drop table ##dbnames
+
+-- Section 2: Creation of temp table and populate
+create table ##dbnames (DBName varchar(75), DBUser varchar(75))
+
+exec dbo.sp_MSforeachdb 'insert into ##dbnames select ''?'',name from [?].dbo.sysusers'
+
+-- Section 3: Populate temp table with user information 
+DECLARE @DatabaseName VARCHAR (50),
+		@DatabaseUser VARCHAR (50)
+        
+DECLARE LoopThru CURSOR FOR SELECT dbname,dbuser FROM ##dbnames
+
+OPEN LoopThru
+	FETCH NEXT FROM LoopThru INTO @DatabaseName, @DatabaseUser
+	
+-- Section 4: Create customized deletion code while populating temp table
+	WHILE @@FETCH_STATUS = 0
+		BEGIN
+			IF @DatabaseUser = @SpecificName	
+			BEGIN
+				PRINT ''
+				PRINT 'USE '+ @DatabaseName +''
+				PRINT 'GO'
+				PRINT 'EXEC sp_dropuser ['+ @DatabaseUser +']' 
+				PRINT 'GO'
+			END
+	FETCH NEXT FROM LoopThru INTO @DatabaseName, @DatabaseUser
+		END
+
+CLOSE LoopThru
+DEALLOCATE LoopThru
+
+-- Section 5: Search and drop user from SQL Server logins - If needed
+PRINT ''
+PRINT '-- ***********************************************************************************'
+PRINT '-- *** Execute the following code to remove user from SQL Server login, if needed *** '
+PRINT ''
+PRINT 'IF  EXISTS (SELECT loginname FROM master.dbo.syslogins WHERE name = '''+ @SpecificName +''')'
+PRINT 'EXEC sp_droplogin '+ @SpecificName +'' 
+PRINT ''
+PRINT '-- End of code'
+-- Section 6: Removal of temp table
+if (select object_id('tempdb..##dbnames')) is not null
+  drop table ##dbnames
+GO
+
+IF OBJECT_ID('[dbo].[sp_dba_RemoveUser]') IS NOT NULL And
+	OBJECTPROPERTY(OBJECT_ID('[dbo].[sp_dba_RemoveUser]'), 'IsProcedure') = 1
+PRINT 'The stored procedure: [dbo].[sp_dba_RemoveUser] was created ***'
+ELSE
+PRINT '*** ERROR! Failed to create stored procedure:  [dbo].[sp_dba_RemoveUser] ***'
+

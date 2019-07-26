@@ -1,0 +1,179 @@
+Script ALL DTS packages on server to text files
+
+This VB script allows you to search DTS packages for keywords, etc. It is also useful for quickly locating what server a given package is on. This is very useful for debugging. Example - you want to know the name of every DTS package the touches a certain table. The text files generated contain the text of every task (including the full text of execute SQL tasks and activex scripts, transformations, etc.) within a DTS package. This script could be run stand alone, or from an activex task within a DTS package or agent job. I personally created a new single DTS package with one copy of this script for each server I want to script. I scheduled it to run nightly. The date is included in the destination folder. This allows me to easily check what has changed in a package over time (i.e. versioning). 
+
+
+
+
+'**********************************************************************
+'  Author:	Darren Gordon
+'  Purpose: 	To script all of your DTS packages out to text files.  
+'		This is useful if you want to search all packages to find
+'		a specific string.  All text from execute SQL tasks and
+'		activex scripts is included in the output files.
+'
+'  Notes:	Set your servername and output folder at the top of
+'		the script.  Also set integrated security on or off.
+'************************************************************************
+
+Function Main()
+
+dim sServername
+sServername = "YOUR_SERVER_NAME"  '<<<<<<<<<<<<< SET YOUR SERVERNAME HERE! <<<<<<<<<<<<<<
+dim DestinationFolder	     '<<<<<<<<<<<<< Specify an output folder! <<<<<<<<<<<<<<
+DestinationFolder = "C:\Documents and Settings\YOUR_USER_NAME\My Documents\SQL BACKUPS\DTS\" & sServername & "\" & GetDate(Now, "")  & "\"
+dim bIntegratedSecurity	     
+bIntegratedSecurity=TRUE     '***NOTE: If you use standard security, set this to false and specify a username and password below
+dim sLogin
+sLogin = ""		
+dim sPassword
+sPassword = ""
+
+	dim DocFilename
+	Dim FileSys
+	set FileSys = CreateObject("Scripting.FileSystemObject")
+	MakeSureDirectoryTreeExists(DestinationFolder)
+	Dim Docfile
+	Dim oApplication   ' As DTS.Application
+	Dim oPackageSQLServer  ' As DTS.PackageSQLServer
+	Dim oPackageInfos   ' As DTS.PackageInfos
+	Dim oPackageInfo     ' As DTS.PackageInfo
+	Dim oPackage           ' As DTS.Package
+
+	Set oApplication = CreateObject("DTS.Application")
+	if bIntegratedSecurity then
+		Set oPackageSQLServer = oApplication.GetPackageSQLServer(sServername,"" ,"" , DTSSQLStgFlag_UseTrustedConnection)
+	else
+		Set oPackageSQLServer = oApplication.GetPackageSQLServer(sServername, sLogin, sPassword, 0)
+	end if
+
+	Set oPackageInfos = oPackageSQLServer.EnumPackageInfos("", True, "")
+
+	Set oPackageInfo = oPackageInfos.Next
+
+'Note: It is IMPORTANT that oPackage be instantiated and destroyed within the loop. Otherwise,
+'previous package info will be carried over and snowballed into a bigger package every time
+'this loop is run. That is NOT what you want.
+	Do Until oPackageInfos.EOF
+		Set oPackage = CreateObject("DTS.Package2")
+		'**** INTEGRATED SECURITY METHOD
+		if bIntegratedSecurity then
+			oPackage.LoadFromSQLServer sServername, , ,DTSSQLStgFlag_UseTrustedConnection , , , , oPackageInfo.Name
+		else
+			'**** STANDARD SECURITY METHOD
+			oPackage.LoadFromSQLServer sServername, sLogin, sPassword,DTSSQLStgFlag_Default , , , , oPackageInfo.Name
+		end if
+		DocFilename = DestinationFolder & oPackageInfo.Name & ".txt"
+		If  FileSys.FileExists(DocFileName) Then FileSys.DeleteFile(DocFileName)
+		FileSys.CreateTextFile (DocFileName)
+
+		set Docfile = FileSys.OpenTextFile (DocFileName,2)
+		dim oTasks, oProperties
+		Set oTasks = oPackage.Tasks
+		For each oTask in oTasks
+			DocFile.write (vbCrLf)
+			DocFile.write (vbCrLf)
+			DocFile.write ("-----TaskDescription:"  & oTask.Description) 
+			Set oProperties = oTask.Properties
+			For Each oProperty In oProperties
+				   DocFile.write (vbCrLf)
+				   DocFile.write ("PropertyName: " &  oProperty.Name & " Value="  & oProperty.Value)
+			Next 
+		Next	
+		DocFile.close
+		Set DocFile = Nothing
+		Set oTasks = Nothing
+		Set oProperties = Nothing
+
+		'**** If you want to actually do something to each package (like turn on logging for example) and save them, you could do this here
+		'oPackage.LogToSQLServer = True
+		'oPackage.LogServerName = sServername
+		'oPackage.LogServerUserName = sLogin
+		'oPackage.LogServerPassword = sPassword
+		'oPackage.LogServerFlags = 0
+		'oPackage.SaveToSQLServer sServername, sLogin, sPassword, DTSSQLStgFlag_Default
+
+		Set oPackage = Nothing
+		Set oPackageInfo = oPackageInfos.Next
+	Loop
+
+'Clean up and free resources
+	Set oApplication = Nothing
+	Set oPackageSQLServer = Nothing
+	Set oPackageInfos = Nothing
+	Set oPackageInfo = Nothing
+	Set oPackage = Nothing
+	Set FileSys = Nothing
+
+	Main = DTSTaskExecResult_Success
+End Function
+
+Function GetDate(dateVal, delimiter)
+
+	'To comply with Option Explict
+	Dim dateMonth, dateDay
+	
+	dateVal = CDate(dateVal) 
+		' Converts the dateVal parameter to a date.
+		' This will cause an error and cause the function 
+		' to exit if the value passed is not a real date.
+		
+	delimiter = CStr(delimiter)
+		' Converts the delimiter parameter, which designates
+		' the delimiting character between the datepart values
+		' to a string value.  If you don't want a delimiting 
+		' character, (such as / or -) then you'd simply pass
+		' in an empty string for this parameter. 
+		
+	
+	dateMonth = Month(dateVal)
+ 	dateDay   = Day(dateVal)
+	
+	GetDate = CStr(Year(dateVal)) & delimiter
+	
+	If dateMonth < 10 Then
+		GetDate = GetDate & "0" 
+	End If
+	
+	GetDate = GetDate & CStr(dateMonth) & delimiter
+
+	If dateDay < 10 Then
+		GetDate = GetDate & "0"
+	End If
+	
+	GetDate = GetDate & CStr(dateDay)
+	
+End Function 
+
+'**********************************************************************
+Function MakeSureDirectoryTreeExists(dirName)
+'**********************************************************************
+	Dim oFS, aFolders, newFolder, i
+	Set oFS = CreateObject("Scripting.FileSystemObject")
+
+	' Check the folder's existence
+	If Not oFS.FolderExists(dirName) Then
+		' Split the various components of the folder's name
+		aFolders = split(dirName, "\")
+
+		' Get the root of the drive
+		newFolder = oFS.BuildPath(aFolders(0), "\")
+
+		' Scan the various folder and create them
+		For i = 1 To UBound(aFolders)
+			newFolder = oFS.BuildPath(newFolder, aFolders(i))
+
+			If Not oFS.FolderExists(newFolder) Then
+				oFS.CreateFolder newFolder
+			End If
+		Next
+	End If
+
+	Set oFS = Nothing
+
+End Function
+
+
+
+
+

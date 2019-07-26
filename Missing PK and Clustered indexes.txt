@@ -1,0 +1,41 @@
+
+--Tables without PK on them
+
+SELECT c.name, b.name 
+
+FROM sys.tables b 
+
+INNER JOIN sys.schemas c ON b.schema_id = c.schema_id 
+
+WHERE b.type = 'U' 
+
+AND NOT EXISTS 
+
+(SELECT a.name 
+
+FROM sys.key_constraints a 
+
+WHERE a.parent_object_id = b.OBJECT_ID 
+
+AND a.schema_id = c.schema_id 
+
+AND a.type = 'PK')
+
+
+
+--To Find Heap tables.
+
+select a.name, b.object_id, b.object_id from sys.tables a 
+
+inner join sys.indexes b 
+
+on a.object_id = b.object_id
+
+and b.type_desc='HEAP'
+
+
+
+
+
+
+

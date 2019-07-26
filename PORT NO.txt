@@ -1,0 +1,30 @@
+--TO Find port number of a SQL instance using TSQL 
+--Please use below code (tsql script) to find port number of a SQL Instance using TSQL. 
+--This may come handy when you need to find this information programmatically for many instances or if you are experiencing trouble to find port number using traditional ways (ie. Using configuration manager etc).
+  
+
+EXEC xp_regread
+@rootkey    =    'HKEY_LOCAL_MACHINE',
+@key        =    'SOFTWARE\MICROSOFT\MSSQLSERVER\MSSQLSERVER\SUPERSOCKETNETLIB\TCP',
+@value_name    =    'TcpPort'
+
+
+*************************************************************************************
+
+working good
+
+DECLARE @portNumber varchar(20), @key varchar(100)
+if charindex('\',@@servername,0) <>0
+begin
+   set @key = 'SOFTWARE\MICROSOFT\Microsoft SQL Server\' +@@servicename+'\MSSQLServer\Supersocketnetlib\TCP'
+end
+else
+begin
+  set @key = 'SOFTWARE\MICROSOFT\MSSQLServer\MSSQLServer\Supersocketnetlib\TCP'
+end
+
+EXEC master..xp_regread @rootkey='HKEY_LOCAL_MACHINE', @key=@key, @value_name='Tcpport', @value=@portNumber OUTPUT
+SELECT 'Server Name: '+@@servername + ' Port Number:'+convert(varchar(10),@portNumber)
+
+--Please note: This code is tested on SQL 2000,2005,2008
+

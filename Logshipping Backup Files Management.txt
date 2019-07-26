@@ -1,0 +1,772 @@
+--Logshipping Backup Files Management
+
+http://www.sqlservercentral.com/scripts/LogShipping/91151/
+
+ The problem occurs very frequent in the environments where Log Shipping is configured. Many times log files on disk get larger due to large SQL processes eating extra disk space This makes DBA to identify the log files which are restored on destination server and are no more required on source server , but are still occupying unnecessary space on source server disk. With this the database that are using same disk in which logs are saved can go in suspect mode If it would not be taken care in time than end users\work would be affected very badly . So to remove log files ,DBA has to first identify the primary and all the secondary servers involved in log shipping. Secondly, which all logs are restored on secondary servers , helping to identify which logs are no more required. So to resolve issues well in time, the DBA will use the automated script to do the job well in short time. This is very typical for any DBA to handle this type of situation in minimum time.
+
+HOW TO USE:
+
+There are two separate scripts for primary and secondary log shipping server. Execute the script accordingly or schedule it as job.
+
+ Change the value of "@DriveSpace" parameter to the Percent % free space you want on drive. At present it is set to 20. Which will leave 20% free space on drive. 
+
+/**************************************************************************/
+/********* EXCUTE FOLLOWING SCRIPT ON PRIMARY LOGSHIPPING SERVER **********/
+/**************************************************************************/
+
+
+USE master
+SET NOCOUNT ON
+
+
+---Start:Store proc to get the disk space
+IF EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'master.[dbo].[Usp_Diskspace_Alert]') AND type in (N'P', N'PC'))
+DROP PROCEDURE [dbo].[Usp_Diskspace_Alert]
+GO
+Create procedure Usp_Diskspace_Alert 
+@iFlag char(1)=Null,
+@DriveSpace int=20 --specified the Drive space
+as
+BEGIN
+Set Nocount on
+IF OBJECT_ID('tempdb..#finan_space_drive') IS NOT NULL DROP TABLE #finan_space_drive 
+IF OBJECT_ID('tempdb..#tmpFSutilDriveSpaceInfo_Fixed') IS NOT NULL DROP TABLE #tmpFSutilDriveSpaceInfo_Fixed 
+IF OBJECT_ID('tempdb..#tmpDriveSpaceInfo') IS NOT NULL DROP TABLE #tmpDriveSpaceInfo 
+IF OBJECT_ID('tempdb..#tmpFSutilDriveSpaceInfo') IS NOT NULL DROP TABLE #tmpFSutilDriveSpaceInfo 
+IF OBJECT_ID('tempdb..#tmpFinalDriveSpace') IS NOT NULL DROP TABLE #tmpFinalDriveSpace 
+
+
+
+
+Declare @Cofig varchar(2),@CofigAdv varchar(2)
+DECLARE @varSQL varchar(1000), @varDrive varchar(10)
+
+
+CREATE TABLE #tmpDriveSpaceInfo
+(drive varchar(10),
+xpFixedDrive_FreeSpace_MB bigint,
+FSutil_FreeSpace_Bytes integer,
+FSutil_Space_Bytes integer,
+FSutil_AvailSpace_Bytes integer 
+)
+
+
+CREATE TABLE #tmpFinalDriveSpace
+(drive varchar(10),
+TotalSpace_MB bigint,
+AvailSpace_Bytes bigint,
+PercentFreeSpace int 
+)
+
+
+CREATE TABLE #tmpFSutilDriveSpaceInfo
+(drive varchar(10),
+info varchar(50)
+)
+
+
+IF OBJECT_ID('master..SrvFinalDriveSpace') IS NULL 
+????begin
+????select * into master..SrvFinalDriveSpace from #tmpFinalDriveSpace
+????end
+ELSE
+????Begin
+????truncate table master.dbo.SrvFinalDriveSpace
+????End
+
+IF OBJECT_ID('master..SrvFinalDriveAlert') IS NULL 
+
+????Begin
+????CREATE TABLE master.[dbo].[SrvFinalDriveAlert]([drive] [varchar](10) NULL,
+????????[percentSpace] [varchar](8) NULL)
+
+????End
+ELSE
+????begin
+????truncate table SrvFinalDriveAlert
+????end
+
+INSERT INTO #tmpDriveSpaceInfo (drive, xpFixedDrive_FreeSpace_MB)
+EXEC master..xp_fixeddrives
+
+DECLARE CUR_DriveLooper CURSOR FOR SELECT drive FROM #tmpDriveSpaceInfo
+
+OPEN CUR_DriveLooper
+FETCH NEXT FROM CUR_DriveLooper INTO @varDrive
+WHILE @@FETCH_STATUS = 0
+BEGIN
+SET @varSQL = 'EXEC master..XP_CMDSHELL ' + ''''+ 'fsutil volume diskfree ' + @varDrive + ':' + ''''
+INSERT INTO #tmpFSutilDriveSpaceInfo (info)
+EXEC(@varSQL)
+UPDATE #tmpFSutilDriveSpaceInfo SET drive = @varDrive WHERE drive IS NULL
+FETCH NEXT FROM CUR_DriveLooper INTO @varDrive
+END
+
+DELETE FROM #tmpFSutilDriveSpaceInfo WHERE info IS NULL
+CLOSE CUR_DriveLooper
+DEALLOCATE CUR_DriveLooper
+
+SELECT drive,
+ltrim(rtrim(left(info,29))) as InfoType,
+ltrim(rtrim(substring (info, charindex (':',info) + 2, 20))) as Size_Bytes
+INTO #tmpFSutilDriveSpaceInfo_Fixed
+FROM #tmpFSutilDriveSpaceInfo
+
+
+
+INSERT INTO #tmpFinalDriveSpace(drive,Totalspace_MB,AvailSpace_Bytes,PercentFreeSpace)
+SELECT a.drive,
+(SELECT cast(Size_Bytes as bigint) FROM #tmpFSutilDriveSpaceInfo_Fixed WHERE drive = a.drive and InfoType = 'Total # of bytes')/1048576 AS FSutil_TotalSpace_MB,
+(SELECT cast(Size_Bytes as bigint) FROM #tmpFSutilDriveSpaceInfo_Fixed WHERE drive = a.drive and InfoType = 'Total # of avail free bytes')/1048576 AS FSutil_AvailableSpace_MB,
+CAST(
+(
+((SELECT cast(Size_Bytes as float) FROM #tmpFSutilDriveSpaceInfo_Fixed WHERE drive = a.drive and InfoType = 'Total # of avail free bytes')/1048576 )/
+((SELECT cast(Size_Bytes as float) FROM #tmpFSutilDriveSpaceInfo_Fixed WHERE drive = a.drive and InfoType = 'Total # of bytes')/1048576 ) 
+)*100 
+as int)
+as percentSpace
+FROM #tmpDriveSpaceInfo a
+where a.drive in (select distinct
+case when charindex('E$',last_backup_file,1) <>0 or charindex('E:',last_backup_file,1) <>0 then 'E'
+when charindex('F$',last_backup_file,1) <>0 or charindex('F:',last_backup_file,1) <>0 then 'F'
+when charindex('G$',last_backup_file,1) <>0 or charindex('G:',last_backup_file,1) <>0 then 'G'
+when charindex('H$',last_backup_file,1) <>0 or charindex('H:',last_backup_file,1) <>0 then 'H'
+when charindex('I$',last_backup_file,1) <>0 or charindex('I:',last_backup_file,1) <>0 then 'I'
+when charindex('J$',last_backup_file,1) <>0 or charindex('J:',last_backup_file,1) <>0 then 'J'
+when charindex('K$',last_backup_file,1) <>0 or charindex('K:',last_backup_file,1) <>0 then 'K'
+when charindex('L$',last_backup_file,1) <>0 or charindex('L:',last_backup_file,1) <>0 then 'L'
+when charindex('M$',last_backup_file,1) <>0 or charindex('M:',last_backup_file,1) <>0 then 'M'
+when charindex('N$',last_backup_file,1) <>0 or charindex('N:',last_backup_file,1) <>0 then 'N'
+when charindex('O$',last_backup_file,1) <>0 or charindex('O:',last_backup_file,1) <>0 then 'O'
+when charindex('P$',last_backup_file,1) <>0 or charindex('P:',last_backup_file,1) <>0 then 'P'
+when charindex('Q$',last_backup_file,1) <>0 or charindex('Q:',last_backup_file,1) <>0 then 'Q'
+when charindex('R$',last_backup_file,1) <>0 or charindex('R:',last_backup_file,1) <>0 then 'R'
+when charindex('S$',last_backup_file,1) <>0 or charindex('S:',last_backup_file,1) <>0 then 'S'
+when charindex('T$',last_backup_file,1) <>0 or charindex('T:',last_backup_file,1) <>0 then 'T'
+when charindex('U$',last_backup_file,1) <>0 or charindex('U:',last_backup_file,1) <>0 then 'U'
+when charindex('V$',last_backup_file,1) <>0 or charindex('V:',last_backup_file,1) <>0 then 'V'
+when charindex('X$',last_backup_file,1) <>0 or charindex('X:',last_backup_file,1) <>0 then 'X'
+when charindex('Y$',last_backup_file,1) <>0 or charindex('Y:',last_backup_file,1) <>0 then 'Y'
+when charindex('Z$',last_backup_file,1) <>0 or charindex('Z:',last_backup_file,1) <>0 then 'Z'
+
+end
+Drive
+from msdb..log_shipping_monitor_primary)
+
+????INSERT into master.dbo.SrvFinalDriveSpace
+????SELECT * from #tmpFinalDriveSpace
+
+????INSERT into master.dbo.SrvFinalDriveAlert
+????SELECT a.drive,case when 
+????convert(int,PercentFreeSpace) < @DriveSpace then 'alert' else 'no-alert' end percentSpace
+????FROM #tmpFinalDriveSpace a
+????WHERE convert(int,PercentFreeSpace) < @DriveSpace
+
+if @iFlag='S'
+SELECT * from master.dbo.SrvFinalDriveSpace
+if @iFlag='A'
+SELECT * from master.dbo.SrvFinalDriveAlert
+
+
+IF OBJECT_ID('tempdb..#finan_space_drive') IS NOT NULL DROP TABLE #finan_space_drive 
+IF OBJECT_ID('tempdb..#tmpFSutilDriveSpaceInfo_Fixed') IS NOT NULL DROP TABLE #tmpFSutilDriveSpaceInfo_Fixed 
+IF OBJECT_ID('tempdb..#tmpDriveSpaceInfo') IS NOT NULL DROP TABLE #tmpDriveSpaceInfo 
+IF OBJECT_ID('tempdb..#tmpFSutilDriveSpaceInfo') IS NOT NULL DROP TABLE #tmpFSutilDriveSpaceInfo 
+IF OBJECT_ID('tempdb..#tmpFinalDriveSpace') IS NOT NULL DROP TABLE #tmpFinalDriveSpace 
+
+
+END
+GO
+
+
+
+---END:Store proc to get the disk space
+
+DECLARE @varSQL varchar(1000), @varDrive varchar(10)
+
+IF OBJECT_ID('tempdb..#temp_restore_log') IS NOT NULL DROP TABLE #temp_restore_log 
+IF OBJECT_ID('tempdb..#temp') IS NOT NULL DROP TABLE #temp 
+IF OBJECT_ID('tempdb..#Temp_Secondary') IS NOT NULL DROP TABLE #Temp_Secondary 
+IF OBJECT_ID('tempdb..#temp_restore_file') IS NOT NULL DROP TABLE #temp_restore_file 
+
+Declare @Cofig varchar(2),@CofigAdv varchar(2)
+create table #temp(id int identity(1,1),file_exist char(2))
+create table #Temp_Secondary(servnm nvarchar(2000) ,id int identity(1,1))
+create table #temp_restore_file(filenm nvarchar(2000) ,primary_database nvarchar(1000),last_restored_date datetime,id int identity(1,1))
+---Specify the percentage 15% for drive space
+
+exec dbo.Usp_Diskspace_Alert @iFlag=null
+
+IF exists (select top 1 1 from master.dbo.SrvFinalDriveAlert
+where percentSpace like 'alert' )
+BEGIN
+
+--Start:taken the Last Restore file on secondary server
+if not exists(select top 1 1 from sys.configurations 
+????????????????where name ='show advanced options' and value_in_use=1)
+
+????BEGIN
+????????
+????????exec sp_configure 'show advanced options',1
+????????reconfigure with override
+???? set @CofigAdv='S'
+????END
+
+if not exists(select top 1 1 from sys.configurations 
+????????????where name ='Ad Hoc Distributed Queries' and value_in_use=1)
+????BEGIN
+????
+????exec sp_configure 'Ad Hoc Distributed Queries',1
+????reconfigure
+????set @Cofig='A'
+????END
+
+
+
+if exists(select top 1 1 from sys.configurations 
+where name ='Ad Hoc Distributed Queries' and value_in_use=1)
+Begin
+
+
+INSERT into #Temp_Secondary(servnm)
+SELECT DISTINCT 'Server='+Secondary_Server+';Trusted_Connection=yes;'
+from msdb.dbo.log_shipping_primary_Secondaries
+
+
+declare @maxServ int,@Cnt int,@i int
+declare @QueryS nvarchar(2000)
+set @i=1
+set @QueryS=''
+
+select @maxServ=max(id) from #Temp_Secondary
+select @Cnt=min(id) from #Temp_Secondary
+
+????????while (@Cnt <= @maxServ)
+????????begin
+????????set @QueryS='insert into #temp_restore_file(filenm,last_restored_date,primary_database)' +char(13)????????
+????????select @QueryS=@QueryS+'SELECT a.* FROM OPENROWSET(''SQLNCLI'','+''''+servnm+''''+
+????????', ''select last_restored_file,last_restored_date,primary_database from msdb..log_shipping_monitor_secondary'') AS a;'
+????????from #Temp_Secondary 
+????????where id=@Cnt
+
+
+????????exec(@QueryS)
+????
+????????set @Cnt=@Cnt+1
+????????set @QueryS=''
+????????end
+
+END
+
+--End:taken the Last Restore file on secondary server
+
+
+IF @@ERROR <> 0 
+ BEGIN
+ -- Return 99 to the calling program to indicate failure.
+ PRINT N'An error occurred while running store proc';
+????????IF (@Cofig='A')
+????????????Begin
+????????????????exec sp_configure 'Ad Hoc Distributed Queries',0
+????????????????reconfigure
+????????????END
+????????IF(@CofigAdv='S')
+????????????Begin
+????????????????exec sp_configure 'show advanced options',0
+????????????????reconfigure
+????????????END
+????????
+ 
+ END
+
+
+IF (@Cofig='A')
+Begin
+????exec sp_configure 'Ad Hoc Distributed Queries',0
+????reconfigure
+END
+IF(@CofigAdv='S')
+Begin
+????exec sp_configure 'show advanced options',0
+????reconfigure
+END
+
+
+IF OBJECT_ID('tempdb..#temp_restore_log') IS NOT NULL DROP TABLE #temp_restore_log 
+
+CREATE table #temp_restore_log 
+(physical_device_name nvarchar(2000),primary_database nvarchar(1000),restore_date datetime ,id int identity(1,1),file_exists char(2),Drive varchar(10))
+
+
+INSERT into #temp_restore_log(physical_device_name,primary_database,restore_date,file_exists,Drive)
+
+SELECT physical_device_name,database_name,backup_start_date, 0,
+case when charindex('E$',physical_device_name,1) <>0 or charindex('E:',physical_device_name,1) <>0 then 'E'
+when charindex('F$',physical_device_name,1) <>0 or charindex('F:',physical_device_name,1) <>0 then 'F'
+when charindex('G$',physical_device_name,1) <>0 or charindex('G:',physical_device_name,1) <>0 then 'G'
+when charindex('H$',physical_device_name,1) <>0 or charindex('H:',physical_device_name,1) <>0 then 'H'
+when charindex('I$',physical_device_name,1) <>0 or charindex('I:',physical_device_name,1) <>0 then 'I'
+when charindex('J$',physical_device_name,1) <>0 or charindex('J:',physical_device_name,1) <>0 then 'J'
+when charindex('K$',physical_device_name,1) <>0 or charindex('K:',physical_device_name,1) <>0 then 'K'
+when charindex('L$',physical_device_name,1) <>0 or charindex('L:',physical_device_name,1) <>0 then 'L'
+when charindex('M$',physical_device_name,1) <>0 or charindex('M:',physical_device_name,1) <>0 then 'M'
+when charindex('N$',physical_device_name,1) <>0 or charindex('N:',physical_device_name,1) <>0 then 'N'
+when charindex('O$',physical_device_name,1) <>0 or charindex('O:',physical_device_name,1) <>0 then 'O'
+when charindex('P$',physical_device_name,1) <>0 or charindex('P:',physical_device_name,1) <>0 then 'P'
+when charindex('Q$',physical_device_name,1) <>0 or charindex('Q:',physical_device_name,1) <>0 then 'Q'
+when charindex('R$',physical_device_name,1) <>0 or charindex('R:',physical_device_name,1) <>0 then 'R'
+when charindex('S$',physical_device_name,1) <>0 or charindex('S:',physical_device_name,1) <>0 then 'S'
+when charindex('T$',physical_device_name,1) <>0 or charindex('T:',physical_device_name,1) <>0 then 'T'
+when charindex('U$',physical_device_name,1) <>0 or charindex('U:',physical_device_name,1) <>0 then 'U'
+when charindex('V$',physical_device_name,1) <>0 or charindex('V:',physical_device_name,1) <>0 then 'V'
+when charindex('X$',physical_device_name,1) <>0 or charindex('X:',physical_device_name,1) <>0 then 'X'
+when charindex('Y$',physical_device_name,1) <>0 or charindex('Y:',physical_device_name,1) <>0 then 'Y'
+when charindex('Z$',physical_device_name,1) <>0 or charindex('Z:',physical_device_name,1) <>0 then 'Z'
+end Drive 
+FROM msdb..backupset bs
+inner join msdb..backupmediafamily bm ON bs.media_set_id = bm.media_set_id
+WHERE type='L' and physical_device_name not in (select Last_backup_file from msdb..log_shipping_primary_databases 
+????????????????????????where primary_database in(select secondary_database from msdb..log_shipping_primary_secondaries))
+
+--where primary_database in(select primary_database from msdb..log_shipping_primary_databases ))
+
+and bs.database_name in (select primary_database from msdb..log_shipping_primary_databases )
+
+ORDER BY backup_start_date asc
+
+
+--Including older Trn files older than last restored file
+delete l
+from #temp_restore_log l join 
+(
+
+SELECT R.primary_database,R.Restore_date from #temp_restore_log R join #temp_restore_file F
+on R.primary_database=F.primary_database 
+and ltrim(rtrim(reverse(substring(reverse(R.physical_device_name),1,charindex('\',reverse(R.physical_device_name),1) -1) )))
+=ltrim(rtrim(reverse(substring(reverse(filenm),1,charindex('\',reverse(filenm),1) -1) )))
+
+) t
+on (l.primary_database=t.primary_database
+and l.Restore_date >= t.Restore_date)
+
+delete from #temp_restore_log where restore_date <= (getdate()-7)
+
+
+---checking file physically exists or not:Start
+
+declare @count1 int ,@maxcount int
+select @count1=1
+select @maxcount=max(id) from #temp_restore_log
+declare @vfile nvarchar(max)
+
+set @vfile=''
+
+while (@count1 <= @maxcount)
+begin
+select @vfile='declare @result int'+char(13)
+select @vfile=@vfile+'execute master..xp_fileexist ''' +physical_device_name +''''+', @result output ' from #temp_restore_log where id=@count1
+select @vfile=@vfile+char(13)+'select @result '
+
+insert into #temp(File_exist)
+exec(@vfile)
+
+update #temp_restore_log
+set file_exists=(select File_exist from #temp where id=@count1 )
+where id=@count1
+set @count1=@count1+1
+set @vfile=''
+end
+
+---checking file physically exists or not:END
+
+delete from #temp_restore_log where file_exists='0'
+
+exec dbo.Usp_Diskspace_Alert @iFlag=null
+
+update #temp_restore_log
+????????set file_exists=0
+????????where drive not in (select drive from master.dbo.SrvFinalDriveAlert)
+
+
+declare @v_filename nvarchar(1000),@count int ,@mxcount int
+select @count=min(id) from #temp_restore_log
+select @mxcount=max(id) from #temp_restore_log
+
+while (@count <=@mxcount)
+begin
+select @v_filename=isnull(physical_device_name,'') from #temp_restore_log where id=@count and file_exists='1'
+
+if exists(select top 1 1 from #temp_restore_log where id=@count and file_exists='1')
+begin
+
+print 'EXEC xp_cmdshell ''del '+@v_filename+''';'
+
+exec('xp_cmdshell ''del '+@v_filename+'''')
+
+end
+
+---Checking the drive space
+exec dbo.Usp_Diskspace_Alert @iFlag=null
+
+????if not exists(select top 1 1 from master.dbo.SrvFinalDriveAlert)
+????????Begin
+????????set @count=@mxcount
+????????print 'Alert'
+????????END
+????if exists(select top 1 1 from master.dbo.SrvFinalDriveAlert)
+????????Begin
+????????update #temp_restore_log
+????????set file_exists=0
+????????where drive not in (select drive from master.dbo.SrvFinalDriveAlert)
+
+????????END
+
+
+set @count=@count+1
+set @v_filename=''
+
+end
+
+end
+
+IF OBJECT_ID('tempdb..#temp_restore_file') IS NOT NULL DROP TABLE #temp_restore_file 
+IF OBJECT_ID('tempdb..#temp_restore_log') IS NOT NULL DROP TABLE #temp_restore_log 
+IF OBJECT_ID('tempdb..#temp') IS NOT NULL DROP TABLE #temp 
+IF OBJECT_ID('master.dbo.SrvFinalDriveAlert') IS NOT NULL DROP TABLE dbo.SrvFinalDriveAlert 
+IF OBJECT_ID('tempdb..#Temp_Secondary') IS NOT NULL DROP TABLE #Temp_Secondary
+IF EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'master.[dbo].[Usp_Diskspace_Alert]') AND type in (N'P', N'PC'))
+DROP PROCEDURE [dbo].[Usp_Diskspace_Alert]
+
+
+
+/**************************************************************************/
+/********* EXCUTE FOLLOWING SCRIPT ON SECONDARY LOGSHIPPING SERVER **********/
+/**************************************************************************/
+
+
+USE master
+SET NOCOUNT ON
+
+
+---Store proc start
+IF EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'master.[dbo].[Usp_Diskspace_Alert]') AND type in (N'P', N'PC'))
+DROP PROCEDURE [dbo].[Usp_Diskspace_Alert]
+GO
+Create procedure Usp_Diskspace_Alert 
+@iFlag char(1)=Null,
+@DriveSpace int=20 --specified the Drive space
+as
+BEGIN
+Set Nocount on
+IF OBJECT_ID('tempdb..#tmpFSutilDriveSpaceInfo_Fixed') IS NOT NULL DROP TABLE #tmpFSutilDriveSpaceInfo_Fixed 
+IF OBJECT_ID('tempdb..#tmpDriveSpaceInfo') IS NOT NULL DROP TABLE #tmpDriveSpaceInfo 
+IF OBJECT_ID('tempdb..#tmpFSutilDriveSpaceInfo') IS NOT NULL DROP TABLE #tmpFSutilDriveSpaceInfo 
+IF OBJECT_ID('tempdb..#tmpFinalDriveSpace') IS NOT NULL DROP TABLE #tmpFinalDriveSpace 
+
+
+
+
+Declare @Cofig varchar(2),@CofigAdv varchar(2)
+DECLARE @varSQL varchar(1000), @varDrive varchar(10)
+
+
+CREATE TABLE #tmpDriveSpaceInfo
+(drive varchar(10),
+xpFixedDrive_FreeSpace_MB bigint,
+FSutil_FreeSpace_Bytes integer,
+FSutil_Space_Bytes integer,
+FSutil_AvailSpace_Bytes integer 
+)
+
+
+CREATE TABLE #tmpFinalDriveSpace
+(drive varchar(10),
+TotalSpace_MB bigint,
+AvailSpace_Bytes bigint,
+PercentFreeSpace int 
+)
+
+
+CREATE TABLE #tmpFSutilDriveSpaceInfo
+(drive varchar(10),
+info varchar(50)
+)
+
+
+IF OBJECT_ID('master..SrvFinalDriveSpace') IS NULL 
+????begin
+????select * into master..SrvFinalDriveSpace from #tmpFinalDriveSpace
+????end
+ELSE
+????Begin
+????truncate table master.dbo.SrvFinalDriveSpace
+????End
+
+IF OBJECT_ID('master..SrvFinalDriveAlert') IS NULL 
+
+????Begin
+????CREATE TABLE master.[dbo].[SrvFinalDriveAlert]([drive] [varchar](10) NULL,
+????????[percentSpace] [varchar](8) NULL)
+
+????End
+ELSE
+????begin
+????truncate table SrvFinalDriveAlert
+????end
+
+INSERT INTO #tmpDriveSpaceInfo (drive, xpFixedDrive_FreeSpace_MB)
+EXEC master..xp_fixeddrives
+
+DECLARE CUR_DriveLooper CURSOR FOR SELECT drive FROM #tmpDriveSpaceInfo
+
+OPEN CUR_DriveLooper
+FETCH NEXT FROM CUR_DriveLooper INTO @varDrive
+WHILE @@FETCH_STATUS = 0
+BEGIN
+SET @varSQL = 'EXEC master..xp_cmdshell ' + ''''+ 'fsutil volume diskfree ' + @varDrive + ':' + ''''
+INSERT INTO #tmpFSutilDriveSpaceInfo (info)
+EXEC(@varSQL)
+UPDATE #tmpFSutilDriveSpaceInfo SET drive = @varDrive WHERE drive IS NULL
+FETCH NEXT FROM CUR_DriveLooper INTO @varDrive
+END
+
+DELETE FROM #tmpFSutilDriveSpaceInfo WHERE info IS NULL
+CLOSE CUR_DriveLooper
+DEALLOCATE CUR_DriveLooper
+
+SELECT drive,
+ltrim(rtrim(left(info,29))) as InfoType,
+ltrim(rtrim(substring (info, charindex (':',info) + 2, 20))) as Size_Bytes
+INTO #tmpFSutilDriveSpaceInfo_Fixed
+FROM #tmpFSutilDriveSpaceInfo
+
+
+
+insert into #tmpFinalDriveSpace(drive,TotalSpace_MB,AvailSpace_Bytes,PercentFreeSpace)
+SELECT a.drive,
+(SELECT cast(Size_Bytes as bigint) FROM #tmpFSutilDriveSpaceInfo_Fixed WHERE drive = a.drive and InfoType = 'Total # of bytes')/1048576 AS FSutil_TotalSpace_MB,
+(SELECT cast(Size_Bytes as bigint) FROM #tmpFSutilDriveSpaceInfo_Fixed WHERE drive = a.drive and InfoType = 'Total # of avail free bytes')/1048576 AS FSutil_AvailableSpace_MB,
+CAST(
+(
+((SELECT cast(Size_Bytes as float) FROM #tmpFSutilDriveSpaceInfo_Fixed WHERE drive = a.drive and InfoType = 'Total # of avail free bytes')/1048576 )/
+((SELECT cast(Size_Bytes as float) FROM #tmpFSutilDriveSpaceInfo_Fixed WHERE drive = a.drive and InfoType = 'Total # of bytes')/1048576 ) 
+)*100 
+as int)
+as percentSpace
+FROM #tmpDriveSpaceInfo a
+where a.drive in (select distinct
+case when charindex('E$',last_restored_file,1) <>0 or charindex('E:',last_restored_file,1) <>0 then 'E'
+when charindex('F$',last_restored_file,1) <>0 or charindex('F:',last_restored_file,1) <>0 then 'F'
+when charindex('G$',last_restored_file,1) <>0 or charindex('G:',last_restored_file,1) <>0 then 'G'
+when charindex('H$',last_restored_file,1) <>0 or charindex('H:',last_restored_file,1) <>0 then 'H'
+when charindex('I$',last_restored_file,1) <>0 or charindex('I:',last_restored_file,1) <>0 then 'I'
+when charindex('J$',last_restored_file,1) <>0 or charindex('J:',last_restored_file,1) <>0 then 'J'
+when charindex('K$',last_restored_file,1) <>0 or charindex('K:',last_restored_file,1) <>0 then 'K'
+when charindex('L$',last_restored_file,1) <>0 or charindex('L:',last_restored_file,1) <>0 then 'L'
+when charindex('M$',last_restored_file,1) <>0 or charindex('M:',last_restored_file,1) <>0 then 'M'
+when charindex('N$',last_restored_file,1) <>0 or charindex('N:',last_restored_file,1) <>0 then 'N'
+when charindex('O$',last_restored_file,1) <>0 or charindex('O:',last_restored_file,1) <>0 then 'O'
+when charindex('P$',last_restored_file,1) <>0 or charindex('P:',last_restored_file,1) <>0 then 'P'
+when charindex('Q$',last_restored_file,1) <>0 or charindex('Q:',last_restored_file,1) <>0 then 'Q'
+when charindex('R$',last_restored_file,1) <>0 or charindex('R:',last_restored_file,1) <>0 then 'R'
+when charindex('S$',last_restored_file,1) <>0 or charindex('S:',last_restored_file,1) <>0 then 'S'
+when charindex('T$',last_restored_file,1) <>0 or charindex('T:',last_restored_file,1) <>0 then 'T'
+when charindex('U$',last_restored_file,1) <>0 or charindex('U:',last_restored_file,1) <>0 then 'U'
+when charindex('V$',last_restored_file,1) <>0 or charindex('V:',last_restored_file,1) <>0 then 'V'
+when charindex('X$',last_restored_file,1) <>0 or charindex('X:',last_restored_file,1) <>0 then 'X'
+when charindex('Y$',last_restored_file,1) <>0 or charindex('Y:',last_restored_file,1) <>0 then 'Y'
+when charindex('Z$',last_restored_file,1) <>0 or charindex('Z:',last_restored_file,1) <>0 then 'Z'
+
+end
+Drive
+from msdb..log_shipping_monitor_secondary)
+
+insert into master.dbo.SrvFinalDriveSpace
+select * from #tmpFinalDriveSpace
+
+insert into master.dbo.SrvFinalDriveAlert
+select a.drive,case when 
+convert(int,PercentFreeSpace) < @DriveSpace then 'alert' else 'no-alert' end percentSpace
+FROM #tmpFinalDriveSpace a
+where convert(int,PercentFreeSpace) < @DriveSpace
+
+if @iFlag='S'
+select * from master.dbo.SrvFinalDriveSpace
+if @iFlag='A'
+select * from master.dbo.SrvFinalDriveAlert
+
+IF OBJECT_ID('tempdb..#tmpFSutilDriveSpaceInfo_Fixed') IS NOT NULL DROP TABLE #tmpFSutilDriveSpaceInfo_Fixed 
+IF OBJECT_ID('tempdb..#tmpDriveSpaceInfo') IS NOT NULL DROP TABLE #tmpDriveSpaceInfo 
+IF OBJECT_ID('tempdb..#tmpFSutilDriveSpaceInfo') IS NOT NULL DROP TABLE #tmpFSutilDriveSpaceInfo 
+IF OBJECT_ID('tempdb..#tmpFinalDriveSpace') IS NOT NULL DROP TABLE #tmpFinalDriveSpace 
+
+
+END
+GO
+
+
+
+---Start:Store proc to get the disk space
+
+DECLARE @varSQL varchar(1000), @varDrive varchar(10)
+
+IF OBJECT_ID('tempdb..#temp_flexist') IS NOT NULL DROP TABLE #temp_flexist 
+
+Declare @Cofig varchar(2),@CofigAdv varchar(2)
+create table #temp_flexist(id int identity(1,1),file_exist char(2))
+---Specify the percentage 15% for drive space
+
+exec dbo.Usp_Diskspace_Alert @iFlag=null
+
+
+IF exists (select top 1 1 from master.dbo.SrvFinalDriveAlert
+where percentSpace like 'alert' )
+begin
+--last restore file
+IF OBJECT_ID('tempdb..#temp_restore_file') IS NOT NULL DROP TABLE #temp_restore_file 
+create table #temp_restore_file(filenm nvarchar(2000) ,primary_database nvarchar(1000),last_restored_date datetime,id int identity(1,1))
+insert into #temp_restore_file(filenm,last_restored_date,primary_database)
+select last_restored_file,last_restored_date,secondary_database from msdb..log_shipping_monitor_secondary
+
+
+
+IF OBJECT_ID('tempdb..#temp_restore_log') IS NOT NULL DROP TABLE #temp_restore_log 
+CREATE table #temp_restore_log 
+(physical_device_name nvarchar(2000),primary_database nvarchar(1000),restore_date datetime ,id int identity(1,1),file_exists char(2),Drive varchar(10))
+
+
+insert into #temp_restore_log(physical_device_name,primary_database,restore_date,file_exists,Drive)
+select physical_device_name,destination_database_name,rs.restore_date,0,
+case when charindex('E$',physical_device_name,1) <>0 or charindex('E:',physical_device_name,1) <>0 then 'E'
+when charindex('F$',physical_device_name,1) <>0 or charindex('F:',physical_device_name,1) <>0 then 'F'
+when charindex('G$',physical_device_name,1) <>0 or charindex('G:',physical_device_name,1) <>0 then 'G'
+when charindex('H$',physical_device_name,1) <>0 or charindex('H:',physical_device_name,1) <>0 then 'H'
+when charindex('I$',physical_device_name,1) <>0 or charindex('I:',physical_device_name,1) <>0 then 'I'
+when charindex('J$',physical_device_name,1) <>0 or charindex('J:',physical_device_name,1) <>0 then 'J'
+when charindex('K$',physical_device_name,1) <>0 or charindex('K:',physical_device_name,1) <>0 then 'K'
+when charindex('L$',physical_device_name,1) <>0 or charindex('L:',physical_device_name,1) <>0 then 'L'
+when charindex('M$',physical_device_name,1) <>0 or charindex('M:',physical_device_name,1) <>0 then 'M'
+when charindex('N$',physical_device_name,1) <>0 or charindex('N:',physical_device_name,1) <>0 then 'N'
+when charindex('O$',physical_device_name,1) <>0 or charindex('O:',physical_device_name,1) <>0 then 'O'
+when charindex('P$',physical_device_name,1) <>0 or charindex('P:',physical_device_name,1) <>0 then 'P'
+when charindex('Q$',physical_device_name,1) <>0 or charindex('Q:',physical_device_name,1) <>0 then 'Q'
+when charindex('R$',physical_device_name,1) <>0 or charindex('R:',physical_device_name,1) <>0 then 'R'
+when charindex('S$',physical_device_name,1) <>0 or charindex('S:',physical_device_name,1) <>0 then 'S'
+when charindex('T$',physical_device_name,1) <>0 or charindex('T:',physical_device_name,1) <>0 then 'T'
+when charindex('U$',physical_device_name,1) <>0 or charindex('U:',physical_device_name,1) <>0 then 'U'
+when charindex('V$',physical_device_name,1) <>0 or charindex('V:',physical_device_name,1) <>0 then 'V'
+when charindex('X$',physical_device_name,1) <>0 or charindex('X:',physical_device_name,1) <>0 then 'X'
+when charindex('Y$',physical_device_name,1) <>0 or charindex('Y:',physical_device_name,1) <>0 then 'Y'
+when charindex('Z$',physical_device_name,1) <>0 or charindex('Z:',physical_device_name,1) <>0 then 'Z'
+end Drive 
+from msdb..backupmediafamily bm join msdb..backupset bs on bs.media_set_id = bm.media_set_id
+join msdb..restorehistory rs on rs.backup_set_id=bs.backup_set_id
+where destination_database_name in (select secondary_database from msdb..log_shipping_monitor_secondary)
+and bs.type='L'
+and rs.restore_date >=(getdate()-7)
+order by restore_date asc
+---5 days retention file check
+
+
+--Including older Trn files older than last restored file
+
+DELETE l
+FROM #temp_restore_log l join 
+(
+
+SELECT R.primary_database,R.restore_date from #temp_restore_log R join #temp_restore_file F
+on R.primary_database=F.primary_database 
+and ltrim(rtrim(reverse(substring(reverse(R.physical_device_name),1,charindex('\',reverse(R.physical_device_name),1) -1) )))
+=ltrim(rtrim(reverse(substring(reverse(filenm),1,charindex('\',reverse(filenm),1) -1) )))
+
+) t
+on (l.primary_database=t.primary_database
+and l.restore_date >= t.restore_date)
+
+
+---checking file physically exists or not:Start
+
+declare @count1 int ,@maxcount int
+select @count1=1
+select @maxcount=max(id) from #temp_restore_log
+declare @vfile nvarchar(max)
+
+set @vfile=''
+
+while (@count1 <= @maxcount)
+begin
+select @vfile='declare @result int'+char(13)
+select @vfile=@vfile+'execute master..xp_fileexist ''' +physical_device_name +''''+', @result output ' from #temp_restore_log where id=@count1
+select @vfile=@vfile+char(13)+'select @result '
+
+insert into #temp_flexist(file_exist)
+exec(@vfile)
+
+update #temp_restore_log
+set file_exists=(select file_exist from #temp_flexist where id=@count1 )
+where id=@count1
+set @count1=@count1+1
+set @vfile=''
+end
+---checking file physically exists or not:END
+
+
+delete from #temp_restore_log where file_exists='0'
+
+exec dbo.Usp_Diskspace_Alert @iFlag=null
+
+update #temp_restore_log
+????????set file_exists=0
+????????where Drive not in (select drive from master.dbo.SrvFinalDriveAlert)
+
+declare @v_filename nvarchar(1000),@count int ,@mxcount int
+select @count=min(id) from #temp_restore_log
+select @mxcount=max(id) from #temp_restore_log
+
+while (@count <=@mxcount)
+begin
+select @v_filename=isnull(physical_device_name,'') from #temp_restore_log where id=@count and file_exists='1'
+
+if exists(select top 1 1 from #temp_restore_log where id=@count and file_exists='1')
+begin
+
+print 'EXEC xp_cmdshell ''del '+@v_filename+''';'
+
+exec('xp_cmdshell ''del '+@v_filename+'''')
+
+end
+
+---Checking the drive space
+exec dbo.Usp_Diskspace_Alert @iFlag=null
+????if not exists(select top 1 1 from master.dbo.SrvFinalDriveAlert)
+????????Begin
+????????set @count=@mxcount
+????????print 'Alert'
+????????END
+????if exists(select top 1 1 from master.dbo.SrvFinalDriveAlert)
+????????Begin
+????????update #temp_restore_log
+????????set file_exists=0
+????????where Drive not in (select drive from master.dbo.SrvFinalDriveAlert)
+
+????????END
+
+
+set @count=@count+1
+set @v_filename=''
+
+end
+----end delete
+
+end
+
+IF OBJECT_ID('tempdb..#temp_restore_log') IS NOT NULL DROP TABLE #temp_restore_log 
+IF OBJECT_ID('tempdb..#temp_flexist') IS NOT NULL DROP TABLE #temp_flexist 
+IF OBJECT_ID('master.dbo.SrvFinalDriveAlert') IS NOT NULL DROP TABLE master.dbo.SrvFinalDriveAlert 
+IF OBJECT_ID('master.dbo.SrvFinalDriveSpace') IS NOT NULL DROP TABLE master.dbo.SrvFinalDriveSpace 
+IF OBJECT_ID('tempdb..#temp_restore_file') IS NOT NULL DROP TABLE #temp_restore_file 
+
+
+
+
+
