@@ -1,0 +1,43 @@
+USE DBName
+go
+select
+schemas.name as table_schema,
+tbls.name as table_name,
+i.name as index_name,
+i.id as table_id,
+i.indid as index_id,
+i.rowmodctr as modifiedRows,
+(select max(rowcnt) from sysindexes i2 where i.id = i2.id and i2.indid < 2) as rowcnt,
+convert(DECIMAL(18,8), convert(DECIMAL(18,8),i.rowmodctr) / convert(DECIMAL(18,8),(select max(rowcnt) from sysindexes i2 where i.id = i2.id and i2.indid < 2))) as ModifiedPercent,
+stats_date( i.id, i.indid ) as lastStatsUpdate
+from sysindexes i
+inner join sysobjects tbls on i.id = tbls.id
+inner join sysusers schemas on tbls.uid = schemas.uid
+inner join information_schema.tables tl
+on tbls.name = tl.table_name
+and schemas.name = tl.table_schema
+and tl.table_type='BASE TABLE'
+where 0 < i.indid and i.indid < 255
+and table_schema <> 'sys'
+and i.rowmodctr <> 0
+and i.status not in (8388704,8388672)
+and (select max(rowcnt) from sysindexes i2 where i.id = i2.id and i2.indid < 2) > 0
+
+
+--Reference
+--https://troubleshootingsql.com/2010/01/22/how-to-check-database-statistics-last-updated-date-time-in-sql-server/
+===========================================================
+--For SQL 2000
+
+SELECT 'Index Name' = i.name, 'Table Name' = o.name,
+'Statistics Date' = STATS_DATE(i.id, i.indid)
+FROM sysobjects o, sysindexes i
+where o.id = i.id
+=================================================================
+--For SQL 2005/SQL 2008
+select a.id as 'ObjectID', isnull(a.name,'Heap') as 'IndexName', b.name as 'TableName',
+stats_date (id,indid) as stats_last_updated_time
+from sys.sysindexes as a
+inner join sys.objects as b
+on a.id = b.object_id
+where b.type = 'U'
